@@ -79,16 +79,13 @@ mod test {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(temp_dir, WAL_MAX_SIZE);
 
-        let key = "foo";
-        let value = "bar";
-
-        let wrote = wal.append(key.as_bytes(), value.as_bytes());
+        let wrote = wal.append(b"foo", b"bar");
         assert_eq!(wal.current_size, wrote);
 
         let file = std::fs::File::open(wal.log_file_path).unwrap();
         let wal: WalEntry = bincode::deserialize_from(file).unwrap();
-        assert_eq!(&String::from_utf8_lossy(&wal.key), key);
-        assert_eq!(&String::from_utf8_lossy(&wal.value), value);
+        assert_eq!(&String::from_utf8_lossy(&wal.key), "foo");
+        assert_eq!(&String::from_utf8_lossy(&wal.value), "bar");
         assert!(matches!(wal.operation, Operation::Put));
     }
 }
