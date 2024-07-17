@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
@@ -31,8 +32,8 @@ enum Operation {
 }
 
 impl<P: AsRef<Path>> Wal<P> {
-    pub fn new(log_directory: P, max_size: u64) -> Self {
-        let id = AtomicU64::new(chrono::Utc::now().timestamp() as u64);
+    pub fn new(id: u64, log_directory: P, max_size: u64) -> Self {
+        let id = AtomicU64::new(id);
         let log_file_path = format!(
             "{}/{}.wal",
             log_directory.as_ref().display(),
@@ -56,6 +57,7 @@ impl<P: AsRef<Path>> Wal<P> {
         }
     }
 
+    /// Append a key-value pair to the WAL file.
     pub fn append(&mut self, key: &[u8], value: &[u8]) -> u64 {
         let entry = WalEntry {
             key: key.to_vec(),
@@ -65,6 +67,11 @@ impl<P: AsRef<Path>> Wal<P> {
         let data = bincode::serialize(&entry).unwrap();
         self.current_size += data.len() as u64;
         self.log_file.write(&data).unwrap() as u64
+    }
+
+    pub fn next_id(&self) -> u64 {
+        // This returns the previous, so we add one to it to get the new value.
+        self.id.fetch_add(1, Ordering::Acquire) + 1
     }
 }
 
@@ -77,7 +84,7 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(temp_dir, WAL_MAX_SIZE);
+        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
 
         let wrote = wal.append(b"foo", b"bar");
         assert_eq!(wal.current_size, wrote);
@@ -87,5 +94,13 @@ mod test {
         assert_eq!(&String::from_utf8_lossy(&wal.key), "foo");
         assert_eq!(&String::from_utf8_lossy(&wal.value), "bar");
         assert!(matches!(wal.operation, Operation::Put));
+    }
+
+    #[test]
+    fn next_id() {
+        let temp_dir = TempDir::new("write_wal").unwrap();
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        assert_eq!(wal.next_id(), 1);
+        assert_eq!(wal.next_id(), 2);
     }
 }
