@@ -65,8 +65,30 @@ impl<P: AsRef<Path>> Wal<P> {
             operation: Operation::Put,
         };
         let data = bincode::serialize(&entry).unwrap();
+        let bytes_written = self.log_file.write(&data).unwrap() as u64;
         self.current_size += data.len() as u64;
-        self.log_file.write(&data).unwrap() as u64
+
+        if self.current_size > self.max_size {
+            // Create a new wal file
+            self.rotate()
+        }
+
+        bytes_written
+    }
+
+    pub fn rotate(&mut self) {
+        self.log_file.flush().unwrap();
+
+        let new_id = self.next_id();
+        let log_file_path = format!("{}/{}.wal", self.log_directory.as_ref().display(), new_id);
+        let log_file = std::fs::File::options()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(&log_file_path)
+            .expect("Can rotate WAL file");
+
+        self.log_file = log_file;
     }
 
     pub fn next_id(&self) -> u64 {
@@ -80,6 +102,8 @@ mod test {
     use super::*;
 
     use tempdir::TempDir;
+
+    const TINY_WAL_MAX_SIZE: u64 = 10;
 
     #[test]
     fn write_to_wal() {
@@ -102,5 +126,21 @@ mod test {
         let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
         assert_eq!(wal.next_id(), 1);
         assert_eq!(wal.next_id(), 2);
+    }
+
+    #[test]
+    fn rotation() {
+        let temp_dir = TempDir::new("write_wal").unwrap();
+        let mut wal = Wal::new(0, temp_dir, TINY_WAL_MAX_SIZE); // Force rotation quickly
+
+        for _ in 0..3 {
+            wal.append(b"foo", b"data");
+        }
+        assert_ne!(
+            wal.id.load(Ordering::Acquire),
+            0,
+            "WAL rotation has not occurred"
+        );
+        assert_eq!(wal.id.load(Ordering::Acquire), 3);
     }
 }
