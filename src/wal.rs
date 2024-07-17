@@ -1,3 +1,6 @@
+// TODO: remove once used in other components
+#![allow(dead_code)]
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
