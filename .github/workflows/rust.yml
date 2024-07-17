@@ -1,4 +1,4 @@
-on: [push, pull_request]
+on: [push]
 
 name: Rust
 
@@ -23,7 +23,7 @@ jobs:
           command: check
 
   test:
-    name: Test Suite
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
