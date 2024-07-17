@@ -66,7 +66,7 @@ impl<P: AsRef<Path>> Wal<P> {
         };
         let data = bincode::serialize(&entry).unwrap();
         let bytes_written = self.log_file.write(&data).unwrap() as u64;
-        self.current_size += data.len() as u64;
+        self.current_size += bytes_written as u64;
 
         if self.current_size > self.max_size {
             // Create a new wal file
