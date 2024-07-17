@@ -88,12 +88,11 @@ impl<P: AsRef<Path>> Wal<P> {
         self.log_file.flush().unwrap();
 
         let new_id = self.next_id();
-        let log_file_path = format!("{}/{}.wal", self.log_directory.as_ref().display(), new_id);
         let log_file = std::fs::File::options()
             .create(true)
             .append(true)
             .read(true)
-            .open(log_file_path)
+            .open(self.log_directory.as_ref().join(format!("{new_id}.wal")))
             .expect("Can rotate WAL file");
 
         self.log_file = log_file;
