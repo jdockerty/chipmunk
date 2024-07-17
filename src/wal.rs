@@ -76,6 +76,14 @@ impl<P: AsRef<Path>> Wal<P> {
         bytes_written
     }
 
+    /// Get the current path of the WAL file.
+    pub fn path(&self) -> &Path {
+        &self.log_file_path
+    }
+
+    /// Rotate the current WAL file.
+    ///
+    /// This flushes all operations to the current file before creating a new file.
     pub fn rotate(&mut self) {
         self.log_file.flush().unwrap();
 
@@ -85,12 +93,18 @@ impl<P: AsRef<Path>> Wal<P> {
             .create(true)
             .append(true)
             .read(true)
-            .open(&log_file_path)
+            .open(log_file_path)
             .expect("Can rotate WAL file");
 
         self.log_file = log_file;
     }
 
+    // The current WAL id.
+    pub fn id(&self) -> u64 {
+        self.id.load(Ordering::Acquire)
+    }
+
+    /// Set the next WAL id and return its value.
     pub fn next_id(&self) -> u64 {
         // This returns the previous, so we add one to it to get the new value.
         self.id.fetch_add(1, Ordering::Acquire) + 1
@@ -126,6 +140,25 @@ mod test {
         let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
         assert_eq!(wal.next_id(), 1);
         assert_eq!(wal.next_id(), 2);
+    }
+
+    #[test]
+    fn id() {
+        let temp_dir = TempDir::new("write_wal").unwrap();
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        assert_eq!(wal.id(), 0);
+        assert_eq!(wal.next_id(), 1);
+    }
+
+    #[test]
+    fn wal_path() {
+        let temp_dir = TempDir::new("write_wal").unwrap();
+        let wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE);
+        assert_eq!(
+            wal.path(),
+            temp_dir.path().join("0.wal"),
+            "WAL filename was not in the expected format"
+        );
     }
 
     #[test]
