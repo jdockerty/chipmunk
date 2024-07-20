@@ -8,7 +8,7 @@ use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
 
-pub const WAL_MAX_SIZE: u64 = 1048576; // 1 MiB
+pub const WAL_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
@@ -124,7 +124,7 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
 
         let wrote = wal.append(b"foo", b"bar");
         assert_eq!(wal.current_size, wrote);
@@ -139,7 +139,7 @@ mod test {
     #[test]
     fn next_id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(wal.next_id(), 1);
         assert_eq!(wal.next_id(), 2);
     }
@@ -147,7 +147,7 @@ mod test {
     #[test]
     fn id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(wal.id(), 0);
         assert_eq!(wal.next_id(), 1);
     }
@@ -155,7 +155,7 @@ mod test {
     #[test]
     fn wal_path() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(
             wal.path(),
             temp_dir.path().join("0.wal"),
