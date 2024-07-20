@@ -3,15 +3,19 @@
 
 use std::{
     collections::BTreeMap,
-    io::Write,
-    path::PathBuf,
+    fs::File,
+    io::{BufReader, Read, Write},
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use bytes::Bytes;
 
+use crate::wal::{Wal, WalEntry};
+
 pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
+#[derive(Debug)]
 pub struct Memtable {
     id: AtomicU64,
     tree: BTreeMap<Bytes, Bytes>,
@@ -27,6 +31,29 @@ impl Memtable {
             tree: BTreeMap::new(),
             current_size: 0,
             max_size,
+        }
+    }
+
+    pub fn load<P: AsRef<Path>>(&mut self, wal: Wal<P>) {
+        let wal_file = File::open(wal.path()).expect("File from given WAL should exist");
+        // TODO: this custom offset seems very unnecessary.
+        let mut reader = BufReaderWithOffset::new(wal_file);
+
+        loop {
+            let pos = reader.offset();
+            if pos == wal.size() as usize {
+                break;
+            }
+
+            let entry: WalEntry = bincode::deserialize_from(&mut reader).unwrap();
+            match entry {
+                WalEntry::Put { key, value } => {
+                    self.tree.insert(key.into(), value.into());
+                }
+                WalEntry::Delete { key } => {
+                    self.tree.remove(&*key);
+                }
+            }
         }
     }
 
@@ -84,6 +111,8 @@ mod test {
 
     use tempdir::TempDir;
 
+    use crate::wal::{Wal, WalEntry, WAL_MAX_SIZE_BYTES};
+
     use super::{Memtable, MEMTABLE_MAX_SIZE_BYTES};
 
     const TINY_MEMTABLE_BYTES: u64 = 10;
@@ -122,5 +151,69 @@ mod test {
             data.get(b"foo".as_ref()),
             Some(&bytes::Bytes::from_static(b"bar"))
         );
+    }
+
+    #[test]
+    fn wal_replay() {
+        let wal_dir = TempDir::new("replay").unwrap();
+
+        let mut wal = Wal::new(0, wal_dir, WAL_MAX_SIZE_BYTES);
+        for i in 0..10 {
+            let key = format!("key{i}");
+            let value = format!("value{i}");
+            wal.append(WalEntry::Put {
+                key: key.as_bytes().to_vec(),
+                value: value.as_bytes().to_vec(),
+            });
+        }
+
+        // Remove
+        wal.append(WalEntry::Delete {
+            key: b"key0".to_vec(),
+        });
+
+        let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
+        m.load(wal);
+
+        for i in 0..10 {
+            if i == 0 {
+                assert!(m.get(format!("key{i}").as_bytes()).is_none());
+                continue;
+            }
+            assert_eq!(
+                m.get(format!("key{i}").as_bytes()),
+                Some(format!("value{i}").as_bytes())
+            );
+        }
+    }
+}
+
+// A wrapper around BufReader that tracks the offset.
+struct BufReaderWithOffset<R: Read> {
+    reader: BufReader<R>,
+    offset: usize,
+}
+
+impl<R: Read> BufReaderWithOffset<R> {
+    fn new(reader: R) -> Self {
+        BufReaderWithOffset {
+            reader: BufReader::new(reader),
+            offset: 0,
+        }
+    }
+
+    // Method to get the current offset
+    fn offset(&self) -> usize {
+        self.offset
+    }
+}
+
+impl<R: Read> Read for BufReaderWithOffset<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let result = self.reader.read(buf);
+        if let Ok(size) = result {
+            self.offset += size;
+        }
+        result
     }
 }

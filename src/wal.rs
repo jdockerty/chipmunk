@@ -99,6 +99,10 @@ impl<P: AsRef<Path>> Wal<P> {
         // This returns the previous, so we add one to it to get the new value.
         self.id.fetch_add(1, Ordering::Acquire) + 1
     }
+
+    pub fn size(&self) -> u64 {
+        self.current_size
+    }
 }
 
 #[cfg(test)]
