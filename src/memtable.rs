@@ -1,22 +1,29 @@
 // TODO: remove once used in other components
 #![allow(dead_code)]
 
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use bytes::Bytes;
 
 pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
 pub struct Memtable {
-    tree: BTreeMap<bytes::Bytes, bytes::Bytes>,
+    id: AtomicU64,
+    tree: BTreeMap<Bytes, Bytes>,
 
     current_size: u64,
     max_size: u64,
 }
 
 impl Memtable {
-    pub fn new(max_size: u64) -> Self {
+    pub fn new(id: u64, max_size: u64) -> Self {
         Self {
+            id: AtomicU64::new(id),
             tree: BTreeMap::new(),
             current_size: 0,
             max_size,
@@ -49,7 +56,7 @@ impl Memtable {
     }
 
     /// Write the [`Memtable`] to disk, this then becomes a Sorted String Table
-    /// (SSTable).
+    /// (SSTable) and is immutable.
     pub fn flush(&mut self, flush_dir: PathBuf) {
         let data = bincode::serialize(&self.tree).unwrap();
 
@@ -59,8 +66,14 @@ impl Memtable {
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
-            .open(format!("{}/sstable-1", flush_dir.display()))
+            .open(format!(
+                "{}/sstable-{}",
+                flush_dir.display(),
+                self.id.load(Ordering::Acquire)
+            ))
             .unwrap();
+
+        self.id.fetch_add(1, Ordering::Relaxed);
         f.write_all(&data).unwrap();
     }
 }
@@ -77,7 +90,7 @@ mod test {
 
     #[test]
     fn crud_operations() {
-        let mut m = Memtable::new(MEMTABLE_MAX_SIZE_BYTES);
+        let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         m.put(b"foo", b"bar");
 
         assert_eq!(
@@ -93,7 +106,7 @@ mod test {
 
     #[test]
     fn flush_to_sstable() {
-        let mut m = Memtable::new(TINY_MEMTABLE_BYTES);
+        let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         let flush_dir = TempDir::new("flush").unwrap();
         m.put(b"foo", b"bar");
         assert_eq!(m.current_size, b"foobar".len() as u64);
@@ -102,7 +115,7 @@ mod test {
         assert!(m.tree.is_empty(), "New memtable should be empty");
 
         let sstable_file =
-            std::fs::File::open(flush_dir.path().join("sstable-1")).expect("Flushed file exists");
+            std::fs::File::open(flush_dir.path().join("sstable-0")).expect("Flushed file exists");
         let data: BTreeMap<bytes::Bytes, bytes::Bytes> =
             bincode::deserialize_from(sstable_file).unwrap();
         assert_eq!(
