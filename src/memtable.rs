@@ -61,7 +61,7 @@ impl Memtable {
             .create(true)
             .open(format!("{}/sstable-1", flush_dir.display()))
             .unwrap();
-        f.write(&data).unwrap();
+        f.write_all(&data).unwrap();
     }
 }
 

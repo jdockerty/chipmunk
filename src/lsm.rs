@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::{memtable::Memtable, wal::Wal};
 
-pub struct LSM<P: AsRef<Path>> {
+#[allow(dead_code)]
+pub struct Lsm<P: AsRef<Path>> {
     wal: Wal<P>,
     memtable: Memtable,
 }
