@@ -39,17 +39,41 @@ impl Memtable {
         }
     }
 
+    /// Delete a key-value pair from the [`Memtable`].
+    /// The key must exist in order to be deleted.
     pub fn delete(&mut self, key: &[u8]) -> Result<(), &'static str> {
         match self.tree.remove(key) {
             Some(_) => Ok(()),
             None => Err("cannot remove nonexistent key"),
         }
     }
+
+    /// Write the [`Memtable`] to disk, this then becomes a Sorted String Table
+    /// (SSTable).
+    pub fn flush(&mut self, flush_dir: PathBuf) {
+        let data = bincode::serialize(&self.tree).unwrap();
+
+        self.tree = BTreeMap::new();
+        self.current_size = 0;
+
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(format!("{}/sstable-1", flush_dir.display()))
+            .unwrap();
+        f.write(&data).unwrap();
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::collections::BTreeMap;
+
+    use tempdir::TempDir;
+
     use super::{Memtable, MEMTABLE_MAX_SIZE_BYTES};
+
+    const TINY_MEMTABLE_BYTES: u64 = 10;
 
     #[test]
     fn crud_operations() {
@@ -65,5 +89,25 @@ mod test {
         assert!(m.delete(b"foo").is_ok());
         assert!(m.get(b"foo").is_none());
         assert!(m.delete(b"foo").is_err());
+    }
+
+    #[test]
+    fn flush_to_sstable() {
+        let mut m = Memtable::new(TINY_MEMTABLE_BYTES);
+        let flush_dir = TempDir::new("flush").unwrap();
+        m.put(b"foo", b"bar");
+        assert_eq!(m.current_size, b"foobar".len() as u64);
+        m.flush(flush_dir.path().to_path_buf());
+        assert_eq!(m.current_size, 0, "New memtable should have size of 0");
+        assert!(m.tree.is_empty(), "New memtable should be empty");
+
+        let sstable_file =
+            std::fs::File::open(flush_dir.path().join("sstable-1")).expect("Flushed file exists");
+        let data: BTreeMap<bytes::Bytes, bytes::Bytes> =
+            bincode::deserialize_from(sstable_file).unwrap();
+        assert_eq!(
+            data.get(b"foo".as_ref()),
+            Some(&bytes::Bytes::from_static(b"bar"))
+        );
     }
 }
