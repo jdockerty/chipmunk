@@ -4,7 +4,7 @@
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -90,18 +90,16 @@ impl Memtable {
         self.tree = BTreeMap::new();
         self.current_size = 0;
 
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(format!(
+        std::fs::write(
+            format!(
                 "{}/sstable-{}",
                 flush_dir.display(),
                 self.id.load(Ordering::Acquire)
-            ))
-            .unwrap();
-
+            ),
+            data,
+        )
+        .unwrap();
         self.id.fetch_add(1, Ordering::Relaxed);
-        f.write_all(&data).unwrap();
     }
 }
 
