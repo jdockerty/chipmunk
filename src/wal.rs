@@ -8,11 +8,11 @@ use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
 
-pub const WAL_MAX_SIZE: u64 = 1048576; // 1 MiB
+pub const WAL_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
-pub(crate) struct Wal<P: AsRef<Path>> {
+pub struct Wal<P: AsRef<Path>> {
     id: AtomicU64,
     log_file: File,
     log_directory: P,
@@ -21,17 +21,10 @@ pub(crate) struct Wal<P: AsRef<Path>> {
     max_size: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-struct WalEntry {
-    key: Vec<u8>,
-    value: Vec<u8>,
-    operation: Operation,
-}
-
-#[derive(Serialize, Deserialize)]
-enum Operation {
-    Put,
-    Delete,
+#[derive(Debug, Serialize, Deserialize)]
+pub enum WalEntry {
+    Put { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
 }
 
 impl<P: AsRef<Path>> Wal<P> {
@@ -61,22 +54,19 @@ impl<P: AsRef<Path>> Wal<P> {
     }
 
     /// Append a key-value pair to the WAL file.
-    pub fn append(&mut self, key: &[u8], value: &[u8]) -> u64 {
-        let entry = WalEntry {
-            key: key.to_vec(),
-            value: value.to_vec(),
-            operation: Operation::Put,
-        };
-        let data = bincode::serialize(&entry).unwrap();
-        let bytes_written = self.log_file.write(&data).unwrap() as u64;
-        self.current_size += bytes_written as u64;
+    pub fn append(&mut self, entry: WalEntry) -> u64 {
+        // +1 for the newline inclusion
+        let size = bincode::serialized_size(&entry).unwrap() + 1;
+        bincode::serialize_into(&self.log_file, &entry).unwrap();
+        writeln!(&self.log_file).unwrap();
+        self.current_size += size;
 
         if self.current_size > self.max_size {
             // Create a new wal file
             self.rotate()
         }
 
-        bytes_written
+        size
     }
 
     /// Get the current path of the WAL file.
@@ -111,6 +101,10 @@ impl<P: AsRef<Path>> Wal<P> {
         // This returns the previous, so we add one to it to get the new value.
         self.id.fetch_add(1, Ordering::Acquire) + 1
     }
+
+    pub fn size(&self) -> u64 {
+        self.current_size
+    }
 }
 
 #[cfg(test)]
@@ -124,22 +118,30 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
 
-        let wrote = wal.append(b"foo", b"bar");
+        let entry = WalEntry::Put {
+            key: b"foo".to_vec(),
+            value: b"bar".to_vec(),
+        };
+        let wrote = wal.append(entry);
         assert_eq!(wal.current_size, wrote);
 
-        let file = std::fs::File::open(wal.log_file_path).unwrap();
+        let file = std::fs::File::open(wal.path()).unwrap();
         let wal: WalEntry = bincode::deserialize_from(file).unwrap();
-        assert_eq!(&String::from_utf8_lossy(&wal.key), "foo");
-        assert_eq!(&String::from_utf8_lossy(&wal.value), "bar");
-        assert!(matches!(wal.operation, Operation::Put));
+        match wal {
+            WalEntry::Put { key, value } => {
+                assert_eq!(&String::from_utf8_lossy(&key), "foo");
+                assert_eq!(&String::from_utf8_lossy(&value), "bar");
+            }
+            WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
+        }
     }
 
     #[test]
     fn next_id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(wal.next_id(), 1);
         assert_eq!(wal.next_id(), 2);
     }
@@ -147,7 +149,7 @@ mod test {
     #[test]
     fn id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(wal.id(), 0);
         assert_eq!(wal.next_id(), 1);
     }
@@ -155,7 +157,7 @@ mod test {
     #[test]
     fn wal_path() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE);
+        let wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE_BYTES);
         assert_eq!(
             wal.path(),
             temp_dir.path().join("0.wal"),
@@ -169,7 +171,10 @@ mod test {
         let mut wal = Wal::new(0, temp_dir, TINY_WAL_MAX_SIZE); // Force rotation quickly
 
         for _ in 0..3 {
-            wal.append(b"foo", b"data");
+            wal.append(WalEntry::Put {
+                key: b"foo".to_vec(),
+                value: b"bar".to_vec(),
+            });
         }
         assert_ne!(
             wal.id.load(Ordering::Acquire),
