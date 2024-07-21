@@ -4,7 +4,7 @@
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{BufReader, Read},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -36,16 +36,11 @@ impl Memtable {
 
     pub fn load<P: AsRef<Path>>(&mut self, wal: Wal<P>) {
         let wal_file = File::open(wal.path()).expect("File from given WAL should exist");
-        // TODO: this custom offset seems very unnecessary.
-        let mut reader = BufReaderWithOffset::new(wal_file);
+        let reader = BufReader::new(wal_file);
 
-        loop {
-            let pos = reader.offset();
-            if pos == wal.size() as usize {
-                break;
-            }
-
-            let entry: WalEntry = bincode::deserialize_from(&mut reader).unwrap();
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
             match entry {
                 WalEntry::Put { key, value } => {
                     self.tree.insert(key.into(), value.into());
@@ -183,35 +178,5 @@ mod test {
                 Some(format!("value{i}").as_bytes())
             );
         }
-    }
-}
-
-// A wrapper around BufReader that tracks the offset.
-struct BufReaderWithOffset<R: Read> {
-    reader: BufReader<R>,
-    offset: usize,
-}
-
-impl<R: Read> BufReaderWithOffset<R> {
-    fn new(reader: R) -> Self {
-        BufReaderWithOffset {
-            reader: BufReader::new(reader),
-            offset: 0,
-        }
-    }
-
-    // Method to get the current offset
-    fn offset(&self) -> usize {
-        self.offset
-    }
-}
-
-impl<R: Read> Read for BufReaderWithOffset<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let result = self.reader.read(buf);
-        if let Ok(size) = result {
-            self.offset += size;
-        }
-        result
     }
 }
