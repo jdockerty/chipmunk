@@ -56,9 +56,9 @@ impl Memtable {
     }
 
     /// Put a key-value pair into the [`Memtable`].
-    pub fn put(&mut self, key: &'static [u8], value: &'static [u8]) {
-        let key = Bytes::from_static(key);
-        let value = Bytes::from_static(value);
+    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        let key = Bytes::from(key);
+        let value = Bytes::from(value);
         self.approximate_size
             .fetch_add(value.len() as u64, Ordering::Acquire);
         self.tree.insert(key, value);
@@ -103,6 +103,10 @@ impl Memtable {
         self.id.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn id(&self) -> u64 {
+        self.id.load(Ordering::Acquire)
+    }
+
     pub fn size(&self) -> u64 {
         self.approximate_size.load(Ordering::Acquire)
     }
@@ -128,7 +132,7 @@ mod test {
     #[test]
     fn crud_operations() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
-        m.put(b"foo", b"bar");
+        m.put(b"foo".to_vec(), b"bar".to_vec());
 
         assert_eq!(
             m.get(b"foo"),
@@ -145,7 +149,7 @@ mod test {
     fn flush_to_sstable() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         let flush_dir = TempDir::new("flush").unwrap();
-        m.put(b"foo", b"bar");
+        m.put(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(
             m.size(),
             b"bar".len() as u64,
