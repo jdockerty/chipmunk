@@ -55,16 +55,18 @@ impl<P: AsRef<Path>> Wal<P> {
 
     /// Append a key-value pair to the WAL file.
     pub fn append(&mut self, entry: WalEntry) -> u64 {
-        let data = bincode::serialize(&entry).unwrap();
-        let bytes_written = self.log_file.write(&data).unwrap() as u64;
-        self.current_size += bytes_written as u64;
+        // +1 for the newline inclusion
+        let size = bincode::serialized_size(&entry).unwrap() + 1;
+        bincode::serialize_into(&self.log_file, &entry).unwrap();
+        writeln!(&self.log_file).unwrap();
+        self.current_size += size;
 
         if self.current_size > self.max_size {
             // Create a new wal file
             self.rotate()
         }
 
-        bytes_written
+        size
     }
 
     /// Get the current path of the WAL file.
