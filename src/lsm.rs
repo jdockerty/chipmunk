@@ -100,6 +100,13 @@ impl<P: AsRef<Path>> Lsm<P> {
             }
         }
     }
+
+    pub fn delete(&mut self, key: Vec<u8>) -> Result<(), &'static str> {
+        self.wal.append(WalEntry::Delete { key: key.clone() });
+        // Delete the in-memory value if it exists.
+        let _ = self.memtable.delete(key.as_slice());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -115,8 +122,9 @@ mod test {
 
         lsm.put(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
-        assert!(lsm.get(b"foo").is_some());
-        assert_eq!(lsm.get(b"foo").unwrap(), b"bar");
+        assert_eq!(lsm.get(b"foo"), Some(b"bar".to_vec()));
+        assert_ne!(lsm.wal.size(), 0);
+        let wal_size_after_put = lsm.wal.size();
 
         lsm.rotate_memtable();
         assert_eq!(
@@ -128,6 +136,12 @@ mod test {
             lsm.get(b"foo"),
             Some(b"bar".to_vec()),
             "Value should be found in sstable on disk"
+        );
+
+        assert!(lsm.delete(b"foo".to_vec()).is_ok());
+        assert!(
+            lsm.wal.size() > wal_size_after_put,
+            "Deletion should append to the WAL"
         );
     }
 }
