@@ -57,8 +57,15 @@ impl<P: AsRef<Path>> Lsm<P> {
         self.wal.append(entry);
 
         self.memtable.put(key, value);
+        if self.memtable.size() > self.memtable.max_size() {
+            self.rotate_memtable()
+        }
     }
 
+    /// Force a rotation of the current [`Memtable`].
+    ///
+    /// TODO: can we hold the various sealed tables in memory too for reduced I/O
+    /// on get(k)?
     pub fn rotate_memtable(&mut self) {
         self.sealed_memtables.push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());

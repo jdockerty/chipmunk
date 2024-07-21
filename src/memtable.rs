@@ -111,6 +111,10 @@ impl Memtable {
         self.approximate_size.load(Ordering::Acquire)
     }
 
+    pub fn max_size(&self) -> u64 {
+        self.max_size
+    }
+
     /// Number of elements (keys) within the [`Memtable`].
     pub fn len(&self) -> u64 {
         self.tree.len() as u64
