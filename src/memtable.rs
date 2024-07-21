@@ -152,42 +152,32 @@ mod test {
 
         let mut wal = Wal::new(0, wal_dir, WAL_MAX_SIZE_BYTES);
         for i in 0..10 {
-            let key = format!("key{i}");
-            let value = format!("value{i}");
-            wal.append(WalEntry::Put {
-                key: key.as_bytes().to_vec(),
-                value: value.as_bytes().to_vec(),
-            });
-        }
-
-        // Remove key0 and key6
-        let deletions = vec![
-            WalEntry::Delete {
-                key: b"key0".to_vec(),
-            },
-            WalEntry::Delete {
-                key: b"key6".to_vec(),
-            },
-            WalEntry::Delete {
-                key: b"key3".to_vec(),
-            },
-        ];
-        for d in deletions {
-            wal.append(d);
+            match i {
+                0 | 3 | 6 => wal.append(WalEntry::Delete {
+                    key: format!("key{i}").as_bytes().to_vec(),
+                }),
+                _ => {
+                    let key = format!("key{i}");
+                    let value = format!("value{i}");
+                    wal.append(WalEntry::Put {
+                        key: key.as_bytes().to_vec(),
+                        value: value.as_bytes().to_vec(),
+                    })
+                }
+            };
         }
 
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         m.load(wal);
 
         for i in 0..10 {
-            if i == 0 || i == 6 || i == 3 {
-                assert!(m.get(format!("key{i}").as_bytes()).is_none());
-                continue;
+            match i {
+                0 | 3 | 6 => assert!(m.get(format!("key{i}").as_bytes()).is_none()),
+                _ => assert_eq!(
+                    m.get(format!("key{i}").as_bytes()),
+                    Some(format!("value{i}").as_bytes())
+                ),
             }
-            assert_eq!(
-                m.get(format!("key{i}").as_bytes()),
-                Some(format!("value{i}").as_bytes())
-            );
         }
     }
 }
