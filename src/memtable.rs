@@ -161,18 +161,26 @@ mod test {
         }
 
         // Remove key0 and key6
-        wal.append(WalEntry::Delete {
-            key: b"key0".to_vec(),
-        });
-        wal.append(WalEntry::Delete {
-            key: b"key6".to_vec(),
-        });
+        let deletions = vec![
+            WalEntry::Delete {
+                key: b"key0".to_vec(),
+            },
+            WalEntry::Delete {
+                key: b"key6".to_vec(),
+            },
+            WalEntry::Delete {
+                key: b"key3".to_vec(),
+            },
+        ];
+        for d in deletions {
+            wal.append(d);
+        }
 
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         m.load(wal);
 
         for i in 0..10 {
-            if i == 0 || i == 6 {
+            if i == 0 || i == 6 || i == 3 {
                 assert!(m.get(format!("key{i}").as_bytes()).is_none());
                 continue;
             }
