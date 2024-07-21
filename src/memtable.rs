@@ -96,6 +96,10 @@ impl Memtable {
         .unwrap();
         self.id.fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn size(&self) -> u64 {
+        self.current_size
+    }
 }
 
 #[cfg(test)]
