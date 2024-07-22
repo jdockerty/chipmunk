@@ -10,38 +10,52 @@ use crate::{
     wal::{Wal, WalEntry},
 };
 
-pub struct Lsm<P: AsRef<Path>> {
+pub struct Lsm<P: AsRef<Path> + Clone> {
+    /// Write-ahead Log (WAL) which backs the operations performed on the LSM
+    /// storage engine.
     wal: Wal<P>,
+    /// The configuration which was used to initialise the [`Wal`].
+    wal_config: WalConfig<P>,
 
-    /// Active [`Memtable`]
+    /// Currently active [`Memtable`]
     memtable: Memtable,
+    /// The configuration which was used to initialise the [`Memtable`].
+    memtable_config: MemtableConfig,
 
-    /// IDs of sealed memtables
+    /// IDs of the now immutable memtables
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: Vec<u64>,
 
     working_directory: PathBuf,
 }
 
-pub struct WalConfig<P: AsRef<Path>> {
+#[derive(Debug, Clone)]
+pub struct WalConfig<P: AsRef<Path> + Clone + Sized> {
     id: u64,
     max_size: u64,
     log_directory: P,
 }
 
+#[derive(Debug, Clone)]
 pub struct MemtableConfig {
     id: u64,
     max_size: u64,
 }
 
-impl<P: AsRef<Path>> Lsm<P> {
-    pub fn new(id: u64, max_size: u64, working_directory: P) -> Self {
-        let dir = PathBuf::from(working_directory.as_ref());
+impl<P: AsRef<Path> + Clone> Lsm<P> {
+    pub fn new(wal_config: WalConfig<P>, memtable_config: MemtableConfig) -> Self {
+        let dir = PathBuf::from(wal_config.log_directory.as_ref());
         Self {
-            wal: Wal::new(id, working_directory, max_size),
-            memtable: Memtable::new(id, max_size),
+            wal: Wal::new(
+                wal_config.id,
+                wal_config.clone().log_directory,
+                wal_config.max_size,
+            ),
+            memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
             sstables: Vec::new(),
             working_directory: dir,
+            memtable_config,
+            wal_config,
         }
     }
 
@@ -54,10 +68,16 @@ impl<P: AsRef<Path>> Lsm<P> {
             key: key.to_vec(),
             value: value.to_vec(),
         };
+
         self.wal.append(entry);
+        // TODO: should we remove the implicit rotation from append() and
+        // handle it externally?
+        //if self.wal.size() > self.wal_config.max_size {
+        //    self.wal.rotate();
+        //}
 
         self.memtable.put(key, value);
-        if self.memtable.size() > self.memtable.max_size() {
+        if self.memtable.size() > self.memtable_config.max_size {
             self.rotate_memtable()
         }
     }
@@ -113,12 +133,27 @@ impl<P: AsRef<Path>> Lsm<P> {
 mod test {
     use tempdir::TempDir;
 
+    use crate::{
+        lsm::{MemtableConfig, WalConfig},
+        memtable::MEMTABLE_MAX_SIZE_BYTES,
+        wal::WAL_MAX_SIZE_BYTES,
+    };
+
     use super::Lsm;
 
     #[test]
     fn crud() {
         let dir = TempDir::new("crud").unwrap();
-        let mut lsm = Lsm::new(0, 10, dir.path());
+        let w = WalConfig {
+            id: 0,
+            max_size: WAL_MAX_SIZE_BYTES,
+            log_directory: dir.path(),
+        };
+        let m = MemtableConfig {
+            id: 0,
+            max_size: MEMTABLE_MAX_SIZE_BYTES,
+        };
+        let mut lsm = Lsm::new(w, m);
 
         lsm.put(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
