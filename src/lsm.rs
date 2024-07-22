@@ -18,7 +18,7 @@ pub struct Lsm<P: AsRef<Path>> {
 
     /// IDs of sealed memtables
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
-    sealed_memtables: Vec<u64>,
+    sstables: Vec<u64>,
 
     working_directory: PathBuf,
 }
@@ -40,7 +40,7 @@ impl<P: AsRef<Path>> Lsm<P> {
         Self {
             wal: Wal::new(id, working_directory, max_size),
             memtable: Memtable::new(id, max_size),
-            sealed_memtables: Vec::new(),
+            sstables: Vec::new(),
             working_directory: dir,
         }
     }
@@ -67,7 +67,7 @@ impl<P: AsRef<Path>> Lsm<P> {
     /// TODO: can we hold the various sealed tables in memory too for reduced I/O
     /// on get(k)?
     pub fn rotate_memtable(&mut self) {
-        self.sealed_memtables.push(self.memtable.id());
+        self.sstables.push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());
     }
 
@@ -82,7 +82,7 @@ impl<P: AsRef<Path>> Lsm<P> {
         match self.memtable.get(key) {
             Some(v) => Some(v.to_vec()),
             None => {
-                for memtable_id in self.sealed_memtables.iter().rev() {
+                for memtable_id in self.sstables.iter().rev() {
                     let data = std::fs::read(
                         self.working_directory
                             .join(format!("sstable-{memtable_id}")),
