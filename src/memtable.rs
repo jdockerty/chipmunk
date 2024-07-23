@@ -57,6 +57,11 @@ impl Memtable {
 
     /// Put a key-value pair into the [`Memtable`].
     pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        eprintln!(
+            "Inserting {}={}",
+            String::from_utf8_lossy(&key),
+            String::from_utf8_lossy(&value)
+        );
         let key = Bytes::from(key);
         let value = Bytes::from(value);
         self.approximate_size

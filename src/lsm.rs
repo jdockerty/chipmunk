@@ -73,6 +73,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
 
         self.memtable.put(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
+            eprintln!("Memtable rotation");
             self.rotate_memtable()
         }
     }
@@ -121,6 +122,10 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         // Delete the in-memory value if it exists.
         let _ = self.memtable.delete(key.as_slice());
         Ok(())
+    }
+
+    pub fn memtable_id(&self) -> u64 {
+        self.memtable.id()
     }
 }
 
