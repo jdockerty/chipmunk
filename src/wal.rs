@@ -62,6 +62,7 @@ impl<P: AsRef<Path>> Wal<P> {
         self.current_size += size;
 
         if self.current_size > self.max_size {
+            eprintln!("WAL rotation");
             // Create a new wal file
             self.rotate()
         }
@@ -88,6 +89,7 @@ impl<P: AsRef<Path>> Wal<P> {
             .open(self.log_directory.as_ref().join(format!("{new_id}.wal")))
             .expect("Can rotate WAL file");
 
+        self.current_size = 0;
         self.log_file = log_file;
     }
 
@@ -176,6 +178,7 @@ mod test {
                 value: b"bar".to_vec(),
             });
         }
+        assert_eq!(wal.current_size, 0, "WAL size should reset");
         assert_ne!(
             wal.id.load(Ordering::Acquire),
             0,
