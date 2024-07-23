@@ -70,11 +70,6 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         };
 
         self.wal.append(entry);
-        // TODO: should we remove the implicit rotation from append() and
-        // handle it externally?
-        //if self.wal.size() > self.wal_config.max_size {
-        //    self.wal.rotate();
-        //}
 
         self.memtable.put(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
@@ -178,5 +173,28 @@ mod test {
             lsm.wal.size() > wal_size_after_put,
             "Deletion should append to the WAL"
         );
+    }
+
+    #[test]
+    fn compaction() {
+        let dir = TempDir::new("compaction").unwrap();
+        let w = WalConfig {
+            id: 0,
+            max_size: WAL_MAX_SIZE_BYTES,
+            log_directory: dir.path(),
+        };
+        let m = MemtableConfig {
+            id: 0,
+            max_size: 1024, // Force lots of memtable flushes
+        };
+        let mut lsm = Lsm::new(w, m);
+
+        for i in 0..10000 {
+            let key = format!("key{i}").as_bytes().to_vec();
+            let value = format!("value{i}").as_bytes().to_vec();
+            lsm.put(key, value);
+        }
+
+        assert_ne!(lsm.sstables.len(), 0, "SSTables on disk should not be 0");
     }
 }
