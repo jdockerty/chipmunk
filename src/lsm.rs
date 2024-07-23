@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
@@ -85,6 +86,25 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     pub fn rotate_memtable(&mut self) {
         self.sstables.push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());
+    }
+
+    /// Force a compaction cycle to occur.
+    ///
+    /// This operates as a full compaction. Taking all data from various sstables
+    /// on disk and merging them into new files, removing any tombstones values
+    /// to ensure only the most recent data is kept.
+    pub fn force_compaction(&mut self) {
+        let l2_file: BTreeMap<Bytes, Bytes> = BTreeMap::new();
+        for l1_file_id in &self.sstables {
+            let file = std::fs::read(format!("sstable-{l1_file_id}"))
+                .expect("SSTable exists for compaction");
+            let tree: BTreeMap<Bytes, Bytes> =
+                bincode::deserialize(&file).expect("SSTable is valid format");
+
+            for (k, v) in tree {
+                // let type = bincode::deserialize(&v).unwrap();
+            }
+        }
     }
 
     /// Get a key and corresponding value from the LSM-tree.
@@ -195,17 +215,24 @@ mod test {
         let mut lsm = Lsm::new(w, m);
 
         let mut current_size = dir.path().metadata().unwrap().len();
-        for i in 0..10_000 {
-            let key = format!("key{i}").as_bytes().to_vec();
-            let value = format!("value{i}").as_bytes().to_vec();
-            lsm.put(key, value);
+        let max = 10_000;
+        for j in 0..=max {
+            let key = format!("key{j}").as_bytes().to_vec();
+            let value = format!("value{j}").as_bytes().to_vec();
+            if j % 10 == 0 {
+                lsm.put(key, format!("value0").as_bytes().to_vec());
+            } else {
+                lsm.put(key, value);
+            }
 
             let new_size = dir.path().metadata().unwrap().len();
-            if new_size > current_size {
+            if new_size >= current_size {
+                if j == max {
+                    panic!("No compaction");
+                }
                 current_size = new_size;
             } else {
-                // Compaction occurred
-                println!("Compaction! {i}");
+                println!("Compaction!");
             }
         }
         assert_ne!(
