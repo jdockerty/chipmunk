@@ -185,21 +185,34 @@ mod test {
         let dir = TempDir::new("compaction").unwrap();
         let w = WalConfig {
             id: 0,
-            max_size: WAL_MAX_SIZE_BYTES,
+            max_size: 1024,
             log_directory: dir.path(),
         };
         let m = MemtableConfig {
             id: 0,
-            max_size: 1024, // Force lots of memtable flushes
+            max_size: 1024,
         };
         let mut lsm = Lsm::new(w, m);
 
-        for i in 0..10000 {
+        let mut current_size = dir.path().metadata().unwrap().len();
+        for i in 0..10_000 {
             let key = format!("key{i}").as_bytes().to_vec();
             let value = format!("value{i}").as_bytes().to_vec();
             lsm.put(key, value);
-        }
 
+            let new_size = dir.path().metadata().unwrap().len();
+            if new_size > current_size {
+                current_size = new_size;
+            } else {
+                // Compaction occurred
+                println!("Compaction! {i}");
+            }
+        }
+        assert_ne!(
+            lsm.memtable_id(),
+            0,
+            "Memtable rotation should increment the ID"
+        );
         assert_ne!(lsm.sstables.len(), 0, "SSTables on disk should not be 0");
     }
 }
