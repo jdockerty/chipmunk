@@ -20,7 +20,10 @@ pub struct Memtable {
     id: AtomicU64,
     tree: BTreeMap<Bytes, Bytes>,
 
-    current_size: u64,
+    /// Approximate size of the [`Memtable`]. This is an approximation as it simply
+    /// uses the values to increment size - simply because for most cases the values
+    /// are going to be far larger than identifying keys.
+    approximate_size: AtomicU64,
     max_size: u64,
 }
 
@@ -29,7 +32,7 @@ impl Memtable {
         Self {
             id: AtomicU64::new(id),
             tree: BTreeMap::new(),
-            current_size: 0,
+            approximate_size: AtomicU64::new(0),
             max_size,
         }
     }
@@ -53,10 +56,11 @@ impl Memtable {
     }
 
     /// Put a key-value pair into the [`Memtable`].
-    pub fn put(&mut self, key: &'static [u8], value: &'static [u8]) {
-        let key = Bytes::from_static(key);
-        let value = Bytes::from_static(value);
-        self.current_size += (key.len() + value.len()) as u64;
+    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        let key = Bytes::from(key);
+        let value = Bytes::from(value);
+        self.approximate_size
+            .fetch_add(value.len() as u64, Ordering::Acquire);
         self.tree.insert(key, value);
     }
 
@@ -83,7 +87,9 @@ impl Memtable {
         let data = bincode::serialize(&self.tree).unwrap();
 
         self.tree = BTreeMap::new();
-        self.current_size = 0;
+        // Flushing should happen after a put, therefore the "happens-before"
+        // relationship is maintained here. So we can use Relaxed.
+        self.approximate_size.store(0, Ordering::Relaxed);
 
         std::fs::write(
             format!(
@@ -95,6 +101,23 @@ impl Memtable {
         )
         .unwrap();
         self.id.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id.load(Ordering::Acquire)
+    }
+
+    pub fn size(&self) -> u64 {
+        self.approximate_size.load(Ordering::Acquire)
+    }
+
+    pub fn max_size(&self) -> u64 {
+        self.max_size
+    }
+
+    /// Number of elements (keys) within the [`Memtable`].
+    pub fn len(&self) -> u64 {
+        self.tree.len() as u64
     }
 }
 
@@ -113,7 +136,7 @@ mod test {
     #[test]
     fn crud_operations() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
-        m.put(b"foo", b"bar");
+        m.put(b"foo".to_vec(), b"bar".to_vec());
 
         assert_eq!(
             m.get(b"foo"),
@@ -130,10 +153,14 @@ mod test {
     fn flush_to_sstable() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         let flush_dir = TempDir::new("flush").unwrap();
-        m.put(b"foo", b"bar");
-        assert_eq!(m.current_size, b"foobar".len() as u64);
+        m.put(b"foo".to_vec(), b"bar".to_vec());
+        assert_eq!(
+            m.size(),
+            b"bar".len() as u64,
+            "Size should be approximated based on values"
+        );
         m.flush(flush_dir.path().to_path_buf());
-        assert_eq!(m.current_size, 0, "New memtable should have size of 0");
+        assert_eq!(m.size(), 0, "New memtable should have size of 0");
         assert!(m.tree.is_empty(), "New memtable should be empty");
 
         let sstable_file =
