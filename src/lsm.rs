@@ -64,7 +64,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     ///
     /// A [`WalEntry`] is appended into the WAL before proceeding to insert the
     /// key-value pair into an in-memory index, the L0 [`Memtable`].
-    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
         let entry = WalEntry::Put {
             key: key.to_vec(),
             value: value.to_vec(),
@@ -72,7 +72,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
 
         self.wal.append(entry);
 
-        self.memtable.put(key, value);
+        self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
             eprintln!("Memtable rotation");
             self.rotate_memtable()
@@ -140,7 +140,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     pub fn delete(&mut self, key: Vec<u8>) -> Result<(), &'static str> {
         self.wal.append(WalEntry::Delete { key: key.clone() });
         // Delete the in-memory value if it exists.
-        let _ = self.memtable.delete(key.as_slice());
+        let _ = self.memtable.delete(key);
         Ok(())
     }
 
@@ -175,7 +175,7 @@ mod test {
         };
         let mut lsm = Lsm::new(w, m);
 
-        lsm.put(b"foo".to_vec(), b"bar".to_vec());
+        lsm.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
         assert_eq!(lsm.get(b"foo"), Some(b"bar".to_vec()));
         assert_ne!(lsm.wal.size(), 0);
