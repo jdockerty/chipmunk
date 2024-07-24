@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
@@ -77,6 +76,10 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
             eprintln!("Memtable rotation");
             self.rotate_memtable()
         }
+
+        if self.sstables.len() > 2 {
+            self.force_compaction();
+        }
     }
 
     /// Force a rotation of the current [`Memtable`].
@@ -94,6 +97,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     /// on disk and merging them into new files, removing any tombstones values
     /// to ensure only the most recent data is kept.
     pub fn force_compaction(&mut self) {
+        eprintln!("COMPACTING");
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         for l1_file_id in &self.sstables {
             let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(
@@ -103,17 +107,17 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
             );
 
             for (k, v) in tree {
-                match v {
-                    Some(v) => {
-                        // Only insert values which are NOT tombstones
-                        l2_tree.insert(k, v);
-                    }
-                    None => {}
+                if let Some(v) = v {
+                    // Only insert values which are NOT tombstones
+                    l2_tree.insert(k, v);
                 }
             }
-            std::fs::remove_file(self.working_directory.join(format!("{l1_file_id}")))
+            std::fs::remove_file(self.working_directory.join(format!("sstable-{l1_file_id}")))
                 .expect("Can always remove existing SSTable after compaction");
         }
+        self.sstables.clear();
+
+        // TODO: serialise l2 into file
     }
 
     /// Get a key and corresponding value from the LSM-tree.
@@ -133,11 +137,8 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
                             .join(format!("sstable-{memtable_id}")),
                     );
                     match memtable.get(key) {
-                        Some(v) => match v {
-                            Some(v) => return Some(v.to_vec()),
-                            None => continue,
-                        },
-                        None => continue,
+                        Some(Some(v)) => return Some(v.to_vec()),
+                        None | Some(None) => continue,
                     };
                 }
                 // Exhausted search of entire structure did not find the key, so
@@ -149,8 +150,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
 
     pub fn delete(&mut self, key: Vec<u8>) -> Result<(), &'static str> {
         self.wal.append(WalEntry::Delete { key: key.clone() });
-        // Delete the in-memory value if it exists.
-        let _ = self.memtable.delete(key);
+        self.memtable.delete(key);
         Ok(())
     }
 
@@ -210,46 +210,46 @@ mod test {
         );
     }
 
-    //#[test]
-    //fn compaction() {
-    //    let dir = TempDir::new("compaction").unwrap();
-    //    let w = WalConfig {
-    //        id: 0,
-    //        max_size: 1024,
-    //        log_directory: dir.path(),
-    //    };
-    //    let m = MemtableConfig {
-    //        id: 0,
-    //        max_size: 1024,
-    //    };
-    //    let mut lsm = Lsm::new(w, m);
+    #[test]
+    fn compaction() {
+        let dir = TempDir::new("compaction").unwrap();
+        let w = WalConfig {
+            id: 0,
+            max_size: 1024,
+            log_directory: dir.path(),
+        };
+        let m = MemtableConfig {
+            id: 0,
+            max_size: 256,
+        };
+        let mut lsm = Lsm::new(w, m);
 
-    //    let mut current_size = dir.path().metadata().unwrap().len();
-    //    let max = 10_000;
-    //    for j in 0..=max {
-    //        let key = format!("key{j}").as_bytes().to_vec();
-    //        let value = format!("value{j}").as_bytes().to_vec();
-    //        if j % 10 == 0 {
-    //            lsm.insert(key, format!("value0").as_bytes().to_vec());
-    //        } else {
-    //            lsm.insert(key, value);
-    //        }
+        let mut current_size = dir.path().metadata().unwrap().len();
+        let max = 100;
+        let iterations = 3;
+        let max_iterations = max * iterations;
 
-    //        let new_size = dir.path().metadata().unwrap().len();
-    //        if new_size >= current_size {
-    //            if j == max {
-    //                panic!("No compaction");
-    //            }
-    //            current_size = new_size;
-    //        } else {
-    //            println!("Compaction!");
-    //        }
-    //    }
-    //    assert_ne!(
-    //        lsm.memtable_id(),
-    //        0,
-    //        "Memtable rotation should increment the ID"
-    //    );
-    //    assert_ne!(lsm.sstables.len(), 0, "SSTables on disk should not be 0");
-    //}
+        let mut count = 0;
+        for _ in 1..=iterations {
+            for j in 0..=max {
+                count += 1;
+                let key = format!("key{j}").as_bytes().to_vec();
+                let value = format!("value{j}").as_bytes().to_vec();
+                lsm.insert(key, value);
+
+                let new_size = dir.path().metadata().unwrap().len();
+                if new_size >= current_size {
+                    current_size = new_size;
+                } else {
+                }
+            }
+        }
+        assert!(count < max_iterations, "No compaction");
+        assert_ne!(
+            lsm.memtable_id(),
+            0,
+            "Memtable rotation should increment the ID"
+        );
+        assert_ne!(lsm.sstables.len(), 0, "SSTables on disk should not be 0");
+    }
 }
