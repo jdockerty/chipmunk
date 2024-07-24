@@ -96,14 +96,20 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     pub fn force_compaction(&mut self) {
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         for l1_file_id in &self.sstables {
-            let tree: BTreeMap<Bytes, Bytes> = Memtable::load(
+            let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(
                 self.working_directory
                     .join(format!("sstable-{l1_file_id}"))
                     .clone(),
             );
 
             for (k, v) in tree {
-                l2_tree.insert(k, v);
+                match v {
+                    Some(v) => {
+                        // Only insert values which are NOT tombstones
+                        l2_tree.insert(k, v);
+                    }
+                    None => {}
+                }
             }
             std::fs::remove_file(self.working_directory.join(format!("{l1_file_id}")))
                 .expect("Can always remove existing SSTable after compaction");
@@ -122,14 +128,15 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
             Some(v) => Some(v.to_vec()),
             None => {
                 for memtable_id in self.sstables.iter().rev() {
-                    let data = std::fs::read(
+                    let memtable = Memtable::load(
                         self.working_directory
                             .join(format!("sstable-{memtable_id}")),
-                    )
-                    .expect("Previously sealed memtable file should exist");
-                    let memtable: BTreeMap<Bytes, Bytes> = bincode::deserialize(&data).unwrap();
+                    );
                     match memtable.get(key) {
-                        Some(v) => return Some(v.to_vec()),
+                        Some(v) => match v {
+                            Some(v) => return Some(v.to_vec()),
+                            None => continue,
+                        },
                         None => continue,
                     };
                 }

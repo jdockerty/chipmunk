@@ -4,7 +4,7 @@
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -121,8 +121,8 @@ impl Memtable {
     }
 
     /// Load a [`Memtable`]'s contained data by providing its path.
-    pub fn load(path: PathBuf) -> BTreeMap<Bytes, Bytes> {
-        println!("Loading from {path:?}");
+    pub fn load(path: PathBuf) -> BTreeMap<Bytes, Option<Bytes>> {
+        eprintln!("Loading from {path:?}");
         let data = std::fs::read(&path).unwrap();
         bincode::deserialize(&data).unwrap()
     }
@@ -169,8 +169,8 @@ mod test {
 
         let data = Memtable::load(flush_dir.path().join("sstable-0"));
         assert_eq!(
-            data.get(b"foo".as_ref()),
-            Some(&bytes::Bytes::from_static(b"bar"))
+            *data.get(b"foo".as_ref()).unwrap(),
+            Some(bytes::Bytes::from_static(b"bar"))
         );
     }
 
