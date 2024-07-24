@@ -92,15 +92,14 @@ impl Memtable {
         // relationship is maintained here. So we can use Relaxed.
         self.approximate_size.store(0, Ordering::Relaxed);
 
-        std::fs::write(
-            format!(
-                "{}/sstable-{}",
-                flush_dir.display(),
-                self.id.load(Ordering::Acquire)
-            ),
-            data,
-        )
-        .unwrap();
+        let flush_path = format!(
+            "{}/sstable-{}",
+            flush_dir.display(),
+            self.id.load(Ordering::Acquire)
+        );
+        eprintln!("Flushing to {flush_path:?}");
+
+        std::fs::write(flush_path, data).unwrap();
         self.id.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -168,10 +167,7 @@ mod test {
         assert_eq!(m.size(), 0, "New memtable should have size of 0");
         assert!(m.tree.is_empty(), "New memtable should be empty");
 
-        let sstable_file =
-            std::fs::File::open(flush_dir.path().join("sstable-0")).expect("Flushed file exists");
-        let data: BTreeMap<bytes::Bytes, bytes::Bytes> =
-            bincode::deserialize_from(sstable_file).unwrap();
+        let data = Memtable::load(flush_dir.path().join("sstable-0"));
         assert_eq!(
             data.get(b"foo".as_ref()),
             Some(&bytes::Bytes::from_static(b"bar"))
