@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 
 use bytes::Bytes;
 
@@ -25,6 +26,9 @@ pub struct Lsm<P: AsRef<Path> + Clone> {
     /// IDs of the now immutable memtables
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: Vec<u64>,
+
+    l2_id: AtomicU64,
+    l2_files: Vec<u64>,
 
     working_directory: PathBuf,
 }
@@ -53,13 +57,15 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
             ),
             memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
             sstables: Vec::new(),
+            l2_id: AtomicU64::new(0),
+            l2_files: Vec::new(),
             working_directory: dir,
             memtable_config,
             wal_config,
         }
     }
 
-    /// Put an item into the [`Lsm`] tree.
+    /// Insert an item into the [`Lsm`] tree.
     ///
     /// A [`WalEntry`] is appended into the WAL before proceeding to insert the
     /// key-value pair into an in-memory index, the L0 [`Memtable`].
@@ -75,10 +81,6 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         if self.memtable.size() > self.memtable_config.max_size {
             eprintln!("Memtable rotation");
             self.rotate_memtable()
-        }
-
-        if self.sstables.len() > 2 {
-            self.force_compaction();
         }
     }
 
@@ -100,11 +102,8 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         eprintln!("COMPACTING");
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         for l1_file_id in &self.sstables {
-            let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(
-                self.working_directory
-                    .join(format!("sstable-{l1_file_id}"))
-                    .clone(),
-            );
+            let tree: BTreeMap<Bytes, Option<Bytes>> =
+                Memtable::load(self.working_directory.join(format!("sstable-{l1_file_id}")));
 
             for (k, v) in tree {
                 if let Some(v) = v {
@@ -117,7 +116,13 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         }
         self.sstables.clear();
 
-        // TODO: serialise l2 into file
+        let l2_id = self
+            .l2_id
+            .fetch_add(1, std::sync::atomic::Ordering::Acquire);
+        let flush_path = self.working_directory.join(format!("l2-{l2_id}"));
+        let l2_data = bincode::serialize(&l2_tree).unwrap();
+        std::fs::write(flush_path, l2_data).unwrap();
+        self.l2_files.push(l2_id);
     }
 
     /// Get a key and corresponding value from the LSM-tree.
@@ -148,10 +153,9 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
         }
     }
 
-    pub fn delete(&mut self, key: Vec<u8>) -> Result<(), &'static str> {
+    pub fn delete(&mut self, key: Vec<u8>) {
         self.wal.append(WalEntry::Delete { key: key.clone() });
         self.memtable.delete(key);
-        Ok(())
     }
 
     pub fn memtable_id(&self) -> u64 {
@@ -203,7 +207,7 @@ mod test {
             "Value should be found in sstable on disk"
         );
 
-        assert!(lsm.delete(b"foo".to_vec()).is_ok());
+        lsm.delete(b"foo".to_vec());
         assert!(
             lsm.wal.size() > wal_size_after_put,
             "Deletion should append to the WAL"
@@ -215,41 +219,51 @@ mod test {
         let dir = TempDir::new("compaction").unwrap();
         let w = WalConfig {
             id: 0,
-            max_size: 1024,
+            max_size: WAL_MAX_SIZE_BYTES,
             log_directory: dir.path(),
         };
         let m = MemtableConfig {
             id: 0,
-            max_size: 256,
+            max_size: 1024,
         };
         let mut lsm = Lsm::new(w, m);
 
         let mut current_size = dir.path().metadata().unwrap().len();
-        let max = 100;
-        let iterations = 3;
-        let max_iterations = max * iterations;
 
-        let mut count = 0;
-        for _ in 1..=iterations {
-            for j in 0..=max {
-                count += 1;
+        for i in 1..=5 {
+            for j in 0..=10_000 {
+                // The same key value is used, but overwritten on different
+                // iterations to force entries which should be discarded.
                 let key = format!("key{j}").as_bytes().to_vec();
-                let value = format!("value{j}").as_bytes().to_vec();
-                lsm.insert(key, value);
+                let value = format!("value{i}-{j}").as_bytes().to_vec();
+                lsm.insert(key.clone(), value);
+
+                // Delete every 10th key to accumulate tombstones
+                if j % 10 == 0 {
+                    lsm.delete(key);
+                }
 
                 let new_size = dir.path().metadata().unwrap().len();
                 if new_size >= current_size {
                     current_size = new_size;
-                } else {
                 }
             }
         }
-        assert!(count < max_iterations, "No compaction");
+
+        let final_size = current_size;
+        lsm.force_compaction();
+        let post_compaction_size = dir.path().metadata().unwrap().len();
+
+        assert!(post_compaction_size < final_size);
         assert_ne!(
             lsm.memtable_id(),
             0,
             "Memtable rotation should increment the ID"
         );
-        assert_ne!(lsm.sstables.len(), 0, "SSTables on disk should not be 0");
+        assert_eq!(
+            lsm.sstables.len(),
+            0,
+            "L1 SSTables on disk should be 0 after a full compaction cycle"
+        );
     }
 }
