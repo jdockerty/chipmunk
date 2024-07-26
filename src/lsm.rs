@@ -100,6 +100,8 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     /// to ensure only the most recent data is kept.
     pub fn force_compaction(&mut self) {
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
+        let mut insert_count = 0;
+        let mut skip_count = 0;
         for l1_file_id in &self.sstables {
             let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
             eprintln!("Compacting L1 file: {l1_file:?}");
@@ -107,14 +109,23 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
 
             for (k, v) in tree {
                 if let Some(v) = v {
+                    insert_count += 1;
+                    eprintln!(
+                        "[Compaction] Inserting {} for L2",
+                        String::from_utf8_lossy(&k)
+                    );
                     // Only insert values which are NOT tombstones
                     l2_tree.insert(k, v);
+                } else {
+                    skip_count += 1;
                 }
             }
             std::fs::remove_file(l1_file)
                 .expect("Can always remove existing SSTable after compaction");
         }
         self.sstables.clear();
+        eprintln!("[Compaction] Insertion count: {insert_count}");
+        eprintln!("[Compaction] Skip count: {skip_count}");
 
         let l2_id = self
             .l2_id
