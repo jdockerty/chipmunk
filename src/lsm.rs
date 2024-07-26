@@ -99,11 +99,11 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     /// on disk and merging them into new files, removing any tombstones values
     /// to ensure only the most recent data is kept.
     pub fn force_compaction(&mut self) {
-        eprintln!("COMPACTING");
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         for l1_file_id in &self.sstables {
-            let tree: BTreeMap<Bytes, Option<Bytes>> =
-                Memtable::load(self.working_directory.join(format!("sstable-{l1_file_id}")));
+            let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
+            eprintln!("Compacting L1 file: {l1_file:?}");
+            let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
 
             for (k, v) in tree {
                 if let Some(v) = v {
@@ -111,7 +111,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
                     l2_tree.insert(k, v);
                 }
             }
-            std::fs::remove_file(self.working_directory.join(format!("sstable-{l1_file_id}")))
+            std::fs::remove_file(l1_file)
                 .expect("Can always remove existing SSTable after compaction");
         }
         self.sstables.clear();
