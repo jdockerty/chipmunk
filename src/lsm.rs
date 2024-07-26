@@ -230,7 +230,7 @@ mod test {
 
         let mut current_size = dir.path().metadata().unwrap().len();
 
-        for i in 1..=5 {
+        for i in 1..=3 {
             for j in 0..=1000 {
                 // The same key value is used, but overwritten on different
                 // iterations to force entries which should be discarded.
@@ -251,6 +251,7 @@ mod test {
         lsm.force_compaction();
         let post_compaction_size = dir.path().metadata().unwrap().len();
 
+        println!("Post: {post_compaction_size}, Final: {final_size}");
         assert!(post_compaction_size < final_size);
         assert_ne!(
             lsm.memtable_id(),

@@ -79,6 +79,7 @@ impl Memtable {
 
     /// Delete a key-value pair from the [`Memtable`].
     pub fn delete(&mut self, key: Vec<u8>) {
+        eprintln!("Deleting {}", String::from_utf8_lossy(&key));
         self.tree.insert(key.into(), None);
     }
 
