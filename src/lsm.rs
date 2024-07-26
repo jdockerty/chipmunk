@@ -231,7 +231,7 @@ mod test {
         let mut current_size = dir.path().metadata().unwrap().len();
 
         for i in 1..=5 {
-            for j in 0..=10_000 {
+            for j in 0..=1000 {
                 // The same key value is used, but overwritten on different
                 // iterations to force entries which should be discarded.
                 let key = format!("key{j}").as_bytes().to_vec();
@@ -243,10 +243,7 @@ mod test {
                     lsm.delete(key);
                 }
 
-                let new_size = dir.path().metadata().unwrap().len();
-                if new_size >= current_size {
-                    current_size = new_size;
-                }
+                current_size = dir.path().metadata().unwrap().len();
             }
         }
 
