@@ -69,7 +69,7 @@ impl Memtable {
         self.tree.insert(key, Some(value));
     }
 
-    /// Get a key-value pair from the [`Memtable`].
+    /// Get a value pair from the [`Memtable`].
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         match self.tree.get(key) {
             Some(Some(v)) => Some(v),
