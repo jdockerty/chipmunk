@@ -1,58 +1,49 @@
-on: [push]
-
 name: Rust
 
+on: [push]
+
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-
-      - name: Install rust toolchain
-        uses: actions-rs/toolchain@v1
-
-      - name: Run cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-
   test:
-    name: Tests
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
 
-      - name: Install toolchain
-        uses: actions-rs/toolchain@v1
-
-      - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-
-  lints:
-    name: Lints
+  fmt:
+    name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-
-      - name: Install toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          command: fmt
-          args: --all -- --check
+          components: clippy
+      - run: cargo clippy -- -D warnings
 
-      - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
+  coverage:
+    name: Code coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
         with:
-          command: clippy
-          args: -- -D warnings
+          tool: cargo-tarpaulin
+          checksum: true
+      - name: Run cargo-tarpaulin
+        run: cargo tarpaulin --ignore-tests
