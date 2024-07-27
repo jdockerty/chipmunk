@@ -16,7 +16,6 @@ pub struct Wal<P: AsRef<Path>> {
     id: AtomicU64,
     log_file: File,
     log_directory: P,
-    log_file_path: PathBuf,
     current_size: u64,
     max_size: u64,
 }
@@ -46,7 +45,6 @@ impl<P: AsRef<Path>> Wal<P> {
         Self {
             id,
             log_file,
-            log_file_path: PathBuf::from(log_file_path),
             log_directory,
             current_size: 0,
             max_size,
@@ -65,8 +63,13 @@ impl<P: AsRef<Path>> Wal<P> {
     }
 
     /// Get the current path of the WAL file.
-    pub fn path(&self) -> &Path {
-        &self.log_file_path
+    pub fn path(&self) -> PathBuf {
+        format!(
+            "{}/{}.wal",
+            self.log_directory.as_ref().display(),
+            self.id.load(std::sync::atomic::Ordering::Acquire)
+        )
+        .into()
     }
 
     /// Rotate the current WAL file.
