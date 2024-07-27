@@ -274,7 +274,6 @@ mod test {
         lsm.force_compaction();
         let post_compaction_size = dir_size();
 
-        println!("Post: {post_compaction_size}, Final: {final_size}");
         assert!(post_compaction_size < final_size);
         assert_ne!(
             lsm.memtable_id(),

@@ -61,12 +61,6 @@ impl<P: AsRef<Path>> Wal<P> {
         writeln!(&self.log_file).unwrap();
         self.current_size += size;
 
-        if self.current_size > self.max_size {
-            eprintln!("WAL rotation");
-            // Create a new wal file
-            self.rotate()
-        }
-
         size
     }
 
@@ -79,7 +73,8 @@ impl<P: AsRef<Path>> Wal<P> {
     ///
     /// This flushes all operations to the current file before creating a new file.
     pub fn rotate(&mut self) {
-        self.log_file.flush().unwrap();
+        eprintln!("WAL rotation");
+        self.log_file.sync_all().unwrap();
 
         let new_id = self.next_id();
         let log_file = std::fs::File::options()
@@ -170,7 +165,7 @@ mod test {
     #[test]
     fn rotation() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir, TINY_WAL_MAX_SIZE); // Force rotation quickly
+        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
 
         for _ in 0..3 {
             wal.append(WalEntry::Put {
@@ -178,12 +173,13 @@ mod test {
                 value: b"bar".to_vec(),
             });
         }
+        wal.rotate();
         assert_eq!(wal.current_size, 0, "WAL size should reset");
         assert_ne!(
             wal.id.load(Ordering::Acquire),
             0,
             "WAL rotation has not occurred"
         );
-        assert_eq!(wal.id.load(Ordering::Acquire), 3);
+        assert_eq!(wal.id.load(Ordering::Acquire), 1);
     }
 }
