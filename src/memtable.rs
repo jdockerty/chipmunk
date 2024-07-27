@@ -18,7 +18,7 @@ pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 #[derive(Debug)]
 pub struct Memtable {
     id: AtomicU64,
-    tree: BTreeMap<Bytes, Bytes>,
+    tree: BTreeMap<Bytes, Option<Bytes>>,
 
     /// Approximate size of the [`Memtable`]. This is an approximation as it simply
     /// uses the values to increment size - simply because for most cases the values
@@ -37,7 +37,7 @@ impl Memtable {
         }
     }
 
-    pub fn load<P: AsRef<Path>>(&mut self, wal: Wal<P>) {
+    pub fn restore<P: AsRef<Path>>(&mut self, wal: Wal<P>) {
         let wal_file = File::open(wal.path()).expect("File from given WAL should exist");
         let reader = BufReader::new(wal_file);
 
@@ -46,39 +46,41 @@ impl Memtable {
             let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
             match entry {
                 WalEntry::Put { key, value } => {
-                    self.tree.insert(key.into(), value.into());
+                    self.tree.insert(key.into(), Some(value.into()));
                 }
                 WalEntry::Delete { key } => {
-                    self.tree.remove(&*key);
+                    self.tree.insert(key.into(), None);
                 }
             }
         }
     }
 
     /// Put a key-value pair into the [`Memtable`].
-    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        eprintln!(
+            "Inserting {}={}",
+            String::from_utf8_lossy(&key),
+            String::from_utf8_lossy(&value)
+        );
         let key = Bytes::from(key);
         let value = Bytes::from(value);
         self.approximate_size
             .fetch_add(value.len() as u64, Ordering::Acquire);
-        self.tree.insert(key, value);
+        self.tree.insert(key, Some(value));
     }
 
-    /// Get a key-value pair from the [`Memtable`].
+    /// Get a value pair from the [`Memtable`].
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         match self.tree.get(key) {
-            Some(v) => Some(v),
-            None => None,
+            Some(Some(v)) => Some(v),
+            Some(None) | None => None, // Tombstone or nonexistent
         }
     }
 
     /// Delete a key-value pair from the [`Memtable`].
-    /// The key must exist in order to be deleted.
-    pub fn delete(&mut self, key: &[u8]) -> Result<(), &'static str> {
-        match self.tree.remove(key) {
-            Some(_) => Ok(()),
-            None => Err("cannot remove nonexistent key"),
-        }
+    pub fn delete(&mut self, key: Vec<u8>) {
+        eprintln!("Deleting {}", String::from_utf8_lossy(&key));
+        self.tree.insert(key.into(), None);
     }
 
     /// Write the [`Memtable`] to disk, this then becomes a Sorted String Table
@@ -91,15 +93,14 @@ impl Memtable {
         // relationship is maintained here. So we can use Relaxed.
         self.approximate_size.store(0, Ordering::Relaxed);
 
-        std::fs::write(
-            format!(
-                "{}/sstable-{}",
-                flush_dir.display(),
-                self.id.load(Ordering::Acquire)
-            ),
-            data,
-        )
-        .unwrap();
+        let flush_path = format!(
+            "{}/sstable-{}",
+            flush_dir.display(),
+            self.id.load(Ordering::Acquire)
+        );
+        eprintln!("Flushing to {flush_path:?}");
+
+        std::fs::write(flush_path, data).unwrap();
         self.id.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -119,12 +120,17 @@ impl Memtable {
     pub fn len(&self) -> u64 {
         self.tree.len() as u64
     }
+
+    /// Load a [`Memtable`]'s contained data by providing its path.
+    pub fn load(path: PathBuf) -> BTreeMap<Bytes, Option<Bytes>> {
+        eprintln!("Loading from {path:?}");
+        let data = std::fs::read(&path).unwrap();
+        bincode::deserialize(&data).unwrap()
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
-
     use tempdir::TempDir;
 
     use crate::wal::{Wal, WalEntry, WAL_MAX_SIZE_BYTES};
@@ -136,7 +142,7 @@ mod test {
     #[test]
     fn crud_operations() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
-        m.put(b"foo".to_vec(), b"bar".to_vec());
+        m.insert(b"foo".to_vec(), b"bar".to_vec());
 
         assert_eq!(
             m.get(b"foo"),
@@ -144,16 +150,15 @@ mod test {
             "Expected key to exist after put"
         );
 
-        assert!(m.delete(b"foo").is_ok());
+        m.delete(b"foo".to_vec());
         assert!(m.get(b"foo").is_none());
-        assert!(m.delete(b"foo").is_err());
     }
 
     #[test]
     fn flush_to_sstable() {
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         let flush_dir = TempDir::new("flush").unwrap();
-        m.put(b"foo".to_vec(), b"bar".to_vec());
+        m.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(
             m.size(),
             b"bar".len() as u64,
@@ -163,13 +168,10 @@ mod test {
         assert_eq!(m.size(), 0, "New memtable should have size of 0");
         assert!(m.tree.is_empty(), "New memtable should be empty");
 
-        let sstable_file =
-            std::fs::File::open(flush_dir.path().join("sstable-0")).expect("Flushed file exists");
-        let data: BTreeMap<bytes::Bytes, bytes::Bytes> =
-            bincode::deserialize_from(sstable_file).unwrap();
+        let data = Memtable::load(flush_dir.path().join("sstable-0"));
         assert_eq!(
-            data.get(b"foo".as_ref()),
-            Some(&bytes::Bytes::from_static(b"bar"))
+            *data.get(b"foo".as_ref()).unwrap(),
+            Some(bytes::Bytes::from_static(b"bar"))
         );
     }
 
@@ -195,7 +197,7 @@ mod test {
         }
 
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
-        m.load(wal);
+        m.restore(wal);
 
         for i in 0..10 {
             match i {
