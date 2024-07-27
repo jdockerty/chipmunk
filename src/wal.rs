@@ -18,6 +18,7 @@ pub struct Wal<P: AsRef<Path>> {
     log_directory: P,
     current_size: u64,
     max_size: u64,
+    buffer: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,18 +49,26 @@ impl<P: AsRef<Path>> Wal<P> {
             log_directory,
             current_size: 0,
             max_size,
+            buffer: Vec::new(),
         }
     }
 
-    /// Append a key-value pair to the WAL file.
-    pub fn append(&mut self, entry: WalEntry) -> u64 {
-        // +1 for the newline inclusion
-        let size = bincode::serialized_size(&entry).unwrap() + 1;
-        bincode::serialize_into(&self.log_file, &entry).unwrap();
-        writeln!(&self.log_file).unwrap();
-        self.current_size += size;
+    /// Append one or more key-value pairs to the WAL file.
+    ///
+    pub fn append(&mut self, entries: Vec<WalEntry>) -> u64 {
+        self.append_batch(entries)
+    }
 
-        size
+    /// Append a batch of [`WalEntry`] into the current log file.
+    fn append_batch(&mut self, entries: Vec<WalEntry>) -> u64 {
+        for e in entries {
+            // TODO: create append_entry func which is generic over Write trait
+            bincode::serialize_into(&mut self.buffer, &e).unwrap();
+            writeln!(&mut self.buffer).unwrap();
+        }
+        self.log_file.write_all(&self.buffer).unwrap();
+        self.current_size = self.buffer.len() as u64;
+        self.buffer.len() as u64
     }
 
     /// Get the current path of the WAL file.
@@ -109,6 +118,8 @@ impl<P: AsRef<Path>> Wal<P> {
 
 #[cfg(test)]
 mod test {
+    use std::io::{BufRead, BufReader};
+
     use super::*;
 
     use tempdir::TempDir;
@@ -118,23 +129,46 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
+        let mut wal = Wal::new(0, &temp_dir, WAL_MAX_SIZE_BYTES);
 
         let entry = WalEntry::Put {
             key: b"foo".to_vec(),
             value: b"bar".to_vec(),
         };
-        let wrote = wal.append(entry);
+        let wrote = wal.append(vec![entry]);
         assert_eq!(wal.current_size, wrote);
 
         let file = std::fs::File::open(wal.path()).unwrap();
-        let wal: WalEntry = bincode::deserialize_from(file).unwrap();
-        match wal {
+        let entry: WalEntry = bincode::deserialize_from(&file).unwrap();
+        match entry {
             WalEntry::Put { key, value } => {
                 assert_eq!(&String::from_utf8_lossy(&key), "foo");
                 assert_eq!(&String::from_utf8_lossy(&value), "bar");
             }
             WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
+        }
+
+        // Write multiple entries
+        let mut entries = vec![];
+        for _ in 0..10 {
+            entries.push(WalEntry::Put {
+                key: b"foo".to_vec(),
+                value: b"bar".to_vec(),
+            });
+        }
+        let mut wal = Wal::new(1, &temp_dir, WAL_MAX_SIZE_BYTES);
+        let wrote = wal.append(entries);
+        assert_eq!(wal.current_size, wrote);
+        let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
+        for line in wal_file.lines() {
+            let entry: WalEntry = bincode::deserialize(line.unwrap().as_bytes()).unwrap();
+            match entry {
+                WalEntry::Put { key, value } => {
+                    assert_eq!(&String::from_utf8_lossy(&key), "foo");
+                    assert_eq!(&String::from_utf8_lossy(&value), "bar");
+                }
+                WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
+            }
         }
     }
 
@@ -171,10 +205,10 @@ mod test {
         let mut wal = Wal::new(0, temp_dir, WAL_MAX_SIZE_BYTES);
 
         for _ in 0..3 {
-            wal.append(WalEntry::Put {
+            wal.append(vec![WalEntry::Put {
                 key: b"foo".to_vec(),
                 value: b"bar".to_vec(),
-            });
+            }]);
         }
         wal.rotate();
         assert_eq!(wal.current_size, 0, "WAL size should reset");

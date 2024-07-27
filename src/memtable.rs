@@ -182,16 +182,16 @@ mod test {
         let mut wal = Wal::new(0, wal_dir, WAL_MAX_SIZE_BYTES);
         for i in 0..10 {
             match i {
-                0 | 3 | 6 => wal.append(WalEntry::Delete {
+                0 | 3 | 6 => wal.append(vec![WalEntry::Delete {
                     key: format!("key{i}").as_bytes().to_vec(),
-                }),
+                }]),
                 _ => {
                     let key = format!("key{i}");
                     let value = format!("value{i}");
-                    wal.append(WalEntry::Put {
+                    wal.append(vec![WalEntry::Put {
                         key: key.as_bytes().to_vec(),
                         value: value.as_bytes().to_vec(),
-                    })
+                    }])
                 }
             };
         }

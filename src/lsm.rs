@@ -75,7 +75,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
             value: value.to_vec(),
         };
 
-        self.wal.append(entry);
+        self.wal.append(vec![entry]);
 
         self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
@@ -165,7 +165,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
     }
 
     pub fn delete(&mut self, key: Vec<u8>) {
-        self.wal.append(WalEntry::Delete { key: key.clone() });
+        self.wal.append(vec![WalEntry::Delete { key: key.clone() }]);
         self.memtable.delete(key);
     }
 
