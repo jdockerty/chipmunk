@@ -11,3 +11,4 @@ serde = { version = "1.0.204", features = ["derive"] }
 
 [dev-dependencies]
 tempdir = "0.3.7"
+walkdir = "2.5.0"

@@ -177,6 +177,7 @@ impl<P: AsRef<Path> + Clone> Lsm<P> {
 #[cfg(test)]
 mod test {
     use tempdir::TempDir;
+    use walkdir::WalkDir;
 
     use crate::{
         lsm::{MemtableConfig, WalConfig},
@@ -239,7 +240,18 @@ mod test {
         };
         let mut lsm = Lsm::new(w, m);
 
-        let mut current_size = dir.path().metadata().unwrap().len();
+        let dir_size = || {
+            let entries = WalkDir::new(dir.path()).into_iter();
+            let len: walkdir::Result<u64> = entries
+                .map(|res| {
+                    res.and_then(|entry| entry.metadata())
+                        .map(|metadata| metadata.len())
+                })
+                .sum();
+            len.expect("fail to get directory size")
+        };
+
+        let mut current_size = dir_size();
 
         for i in 1..=3 {
             for j in 0..=1000 {
@@ -254,13 +266,13 @@ mod test {
                     lsm.delete(key);
                 }
 
-                current_size = dir.path().metadata().unwrap().len();
+                current_size = dir_size();
             }
         }
 
         let final_size = current_size;
         lsm.force_compaction();
-        let post_compaction_size = dir.path().metadata().unwrap().len();
+        let post_compaction_size = dir_size();
 
         println!("Post: {post_compaction_size}, Final: {final_size}");
         assert!(post_compaction_size < final_size);
