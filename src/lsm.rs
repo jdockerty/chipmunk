@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
 use bytes::Bytes;
@@ -11,12 +11,12 @@ use crate::{
     wal::{Wal, WalEntry},
 };
 
-pub struct Lsm<P: AsRef<Path> + Clone> {
+pub struct Lsm {
     /// Write-ahead Log (WAL) which backs the operations performed on the LSM
     /// storage engine.
-    wal: Wal<P>,
+    wal: Wal,
     /// The configuration which was used to initialise the [`Wal`].
-    wal_config: WalConfig<P>,
+    wal_config: WalConfig,
 
     /// Currently active [`Memtable`]
     memtable: Memtable,
@@ -34,10 +34,10 @@ pub struct Lsm<P: AsRef<Path> + Clone> {
 }
 
 #[derive(Debug, Clone)]
-pub struct WalConfig<P: AsRef<Path> + Clone + Sized> {
+pub struct WalConfig {
     id: u64,
     max_size: u64,
-    log_directory: P,
+    log_directory: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -46,20 +46,19 @@ pub struct MemtableConfig {
     max_size: u64,
 }
 
-impl<P: AsRef<Path> + Clone> Lsm<P> {
-    pub fn new(wal_config: WalConfig<P>, memtable_config: MemtableConfig) -> Self {
-        let dir = PathBuf::from(wal_config.log_directory.as_ref());
+impl Lsm {
+    pub fn new(wal_config: WalConfig, memtable_config: MemtableConfig) -> Self {
         Self {
             wal: Wal::new(
                 wal_config.id,
-                wal_config.clone().log_directory,
+                wal_config.log_directory.clone(),
                 wal_config.max_size,
             ),
             memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
             sstables: Vec::new(),
             l2_id: AtomicU64::new(0),
             l2_files: Vec::new(),
-            working_directory: dir,
+            working_directory: wal_config.log_directory.clone(),
             memtable_config,
             wal_config,
         }
@@ -182,7 +181,7 @@ mod test {
     use crate::{
         lsm::{MemtableConfig, WalConfig},
         memtable::MEMTABLE_MAX_SIZE_BYTES,
-        wal::WAL_MAX_SIZE_BYTES,
+        wal::WAL_MAX_SEGMENT_SIZE_BYTES,
     };
 
     use super::Lsm;
@@ -192,8 +191,8 @@ mod test {
         let dir = TempDir::new("crud").unwrap();
         let w = WalConfig {
             id: 0,
-            max_size: WAL_MAX_SIZE_BYTES,
-            log_directory: dir.path(),
+            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
+            log_directory: dir.path().to_path_buf(),
         };
         let m = MemtableConfig {
             id: 0,
@@ -231,8 +230,8 @@ mod test {
         let dir = TempDir::new("compaction").unwrap();
         let w = WalConfig {
             id: 0,
-            max_size: WAL_MAX_SIZE_BYTES,
-            log_directory: dir.path(),
+            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
+            log_directory: dir.path().to_path_buf(),
         };
         let m = MemtableConfig {
             id: 0,

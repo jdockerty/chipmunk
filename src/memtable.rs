@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -37,7 +37,7 @@ impl Memtable {
         }
     }
 
-    pub fn restore<P: AsRef<Path>>(&mut self, wal: Wal<P>) {
+    pub fn restore(&mut self, wal: Wal) {
         let wal_file = File::open(wal.path()).expect("File from given WAL should exist");
         let reader = BufReader::new(wal_file);
 
@@ -133,7 +133,7 @@ impl Memtable {
 mod test {
     use tempdir::TempDir;
 
-    use crate::wal::{Wal, WalEntry, WAL_MAX_SIZE_BYTES};
+    use crate::wal::{Wal, WalEntry, WAL_MAX_SEGMENT_SIZE_BYTES};
 
     use super::{Memtable, MEMTABLE_MAX_SIZE_BYTES};
 
@@ -179,7 +179,7 @@ mod test {
     fn wal_replay() {
         let wal_dir = TempDir::new("replay").unwrap();
 
-        let mut wal = Wal::new(0, wal_dir, WAL_MAX_SIZE_BYTES);
+        let mut wal = Wal::new(0, wal_dir.into_path(), WAL_MAX_SEGMENT_SIZE_BYTES);
         for i in 0..10 {
             match i {
                 0 | 3 | 6 => wal.append(vec![WalEntry::Delete {
