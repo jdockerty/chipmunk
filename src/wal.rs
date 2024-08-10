@@ -209,9 +209,15 @@ mod test {
                 value: b"bar".to_vec(),
             }]);
         }
+
+        assert_eq!(wal.closed_segments.len(), 0, "No closed segments");
+        assert_eq!(wal.segment.id(), 0);
+
         wal.rotate();
+
         assert_eq!(wal.current_size, 0, "WAL size should reset");
         assert_ne!(wal.segment.id(), 0, "WAL rotation has not occurred");
+        assert_eq!(wal.closed_segments.len(), 1);
         assert_eq!(wal.segment.id(), 1);
     }
 }
