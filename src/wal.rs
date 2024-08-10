@@ -112,8 +112,9 @@ impl Wal {
         eprintln!("WAL rotation");
         self.segment.flush();
 
-        self.closed_segments.push(self.segment.id());
-        let new_segment = Segment::new(self.segment.id() + 1, self.log_directory.clone());
+        let current_id = self.segment.id();
+        self.closed_segments.push(current_id);
+        let new_segment = Segment::new(current_id + 1, self.log_directory.clone());
         self.current_size = 0;
         self.segment = new_segment;
     }
