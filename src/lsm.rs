@@ -92,6 +92,23 @@ impl Lsm {
         self.memtable.flush(self.working_directory.clone());
     }
 
+    /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
+    /// has been flushed to an [`SSTable`].
+    pub fn remove_closed_segments(&mut self) {
+        self.wal.closed_segments().iter().for_each(|segment_id| {
+            println!(
+                "Removing {}/{segment_id}.wal",
+                self.working_directory.display()
+            );
+            std::fs::remove_file(format!(
+                "{}/{segment_id}.wal",
+                self.working_directory.display()
+            ))
+            .unwrap()
+        });
+        self.wal.clear_segments();
+    }
+
     /// Force a compaction cycle to occur.
     ///
     /// This operates as a full compaction. Taking all data from various sstables
