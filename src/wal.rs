@@ -122,6 +122,23 @@ impl Wal {
     pub fn size(&self) -> u64 {
         self.current_size
     }
+
+    /// ID of the active segment file.
+    pub fn id(&self) -> u64 {
+        self.segment.id()
+    }
+
+    /// Retrieve all closed segments.
+    ///
+    /// NOTE: These are safe to remove when the current [`Memtable`] has been
+    /// flushed to an [`SSTable`].
+    pub fn closed_segments(&self) -> Vec<u64> {
+        self.closed_segments.clone()
+    }
+
+    pub fn clear_segments(&mut self) {
+        self.closed_segments.clear();
+    }
 }
 
 #[cfg(test)]
