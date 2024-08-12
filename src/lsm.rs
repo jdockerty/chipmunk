@@ -192,6 +192,8 @@ impl Lsm {
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+
     use tempdir::TempDir;
     use walkdir::WalkDir;
 
@@ -300,6 +302,53 @@ mod test {
             lsm.sstables.len(),
             0,
             "L1 SSTables on disk should be 0 after a full compaction cycle"
+        );
+    }
+
+    #[test]
+    fn segment_cleanup() {
+        let dir = TempDir::new("compaction").unwrap();
+        let w = WalConfig {
+            id: 0,
+            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
+            log_directory: dir.path().to_path_buf(),
+        };
+        let m = MemtableConfig {
+            id: 0,
+            max_size: 1024,
+        };
+        let mut lsm = Lsm::new(w, m);
+
+        for i in 0..100 {
+            lsm.insert(
+                format!("foo{i}").into_bytes(),
+                format!("bar{i}").into_bytes(),
+            );
+        }
+
+        assert_eq!(lsm.wal.id(), 0);
+        for _ in 1..=5 {
+            // Force rotations
+            lsm.wal.rotate();
+            lsm.rotate_memtable();
+        }
+        assert_eq!(lsm.wal.id(), 5);
+        assert_eq!(lsm.wal.closed_segments().len(), 5);
+
+        for i in 0..=5 {
+            assert!(
+                Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists(),
+                "WAL segments should exist after rotation"
+            );
+        }
+        lsm.remove_closed_segments();
+        for i in 0..5 {
+            assert!(!Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists());
+        }
+        assert_eq!(
+            lsm.wal.closed_segments().len(),
+            0,
+            "No closed segments remaining after removal",
         );
     }
 }
