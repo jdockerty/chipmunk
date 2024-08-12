@@ -205,19 +205,24 @@ mod test {
 
     use super::Lsm;
 
-    #[test]
-    fn crud() {
-        let dir = TempDir::new("crud").unwrap();
+    // Helper for creating an [`Lsm`] store within a test directory
+    fn create_lsm(dir: &TempDir, wal_max_size: u64, memtable_max_size: u64) -> Lsm {
         let w = WalConfig {
             id: 0,
-            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
+            max_size: wal_max_size,
             log_directory: dir.path().to_path_buf(),
         };
         let m = MemtableConfig {
             id: 0,
-            max_size: MEMTABLE_MAX_SIZE_BYTES,
+            max_size: memtable_max_size,
         };
-        let mut lsm = Lsm::new(w, m);
+        Lsm::new(w, m)
+    }
+
+    #[test]
+    fn crud() {
+        let dir = TempDir::new("crud").unwrap();
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
@@ -247,16 +252,7 @@ mod test {
     #[test]
     fn compaction() {
         let dir = TempDir::new("compaction").unwrap();
-        let w = WalConfig {
-            id: 0,
-            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
-            log_directory: dir.path().to_path_buf(),
-        };
-        let m = MemtableConfig {
-            id: 0,
-            max_size: 1024,
-        };
-        let mut lsm = Lsm::new(w, m);
+        let mut lsm = create_lsm(&dir, 1024, 1024);
 
         let dir_size = || {
             let entries = WalkDir::new(dir.path()).into_iter();
@@ -308,17 +304,7 @@ mod test {
     #[test]
     fn segment_cleanup() {
         let dir = TempDir::new("segment_cleanup").unwrap();
-        let w = WalConfig {
-            id: 0,
-            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
-            log_directory: dir.path().to_path_buf(),
-        };
-        let m = MemtableConfig {
-            id: 0,
-            max_size: 1024,
-        };
-        let mut lsm = Lsm::new(w, m);
-
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
         for i in 0..100 {
             lsm.insert(
                 format!("foo{i}").into_bytes(),
