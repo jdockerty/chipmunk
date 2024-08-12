@@ -307,7 +307,7 @@ mod test {
 
     #[test]
     fn segment_cleanup() {
-        let dir = TempDir::new("compaction").unwrap();
+        let dir = TempDir::new("segment_cleanup").unwrap();
         let w = WalConfig {
             id: 0,
             max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
