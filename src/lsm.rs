@@ -40,10 +40,26 @@ pub struct WalConfig {
     log_directory: PathBuf,
 }
 
+impl WalConfig {
+    pub fn new(id: u64, max_size: u64, log_directory: PathBuf) -> Self {
+        Self {
+            id,
+            max_size,
+            log_directory,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemtableConfig {
     id: u64,
     max_size: u64,
+}
+
+impl MemtableConfig {
+    pub fn new(id: u64, max_size: u64) -> Self {
+        Self { id, max_size }
+    }
 }
 
 impl Lsm {
