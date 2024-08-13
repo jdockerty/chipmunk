@@ -92,6 +92,17 @@ impl Lsm {
         self.memtable.flush(self.working_directory.clone());
     }
 
+    /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
+    /// has been flushed to an [`SSTable`].
+    pub fn remove_closed_segments(&mut self) {
+        self.wal.closed_segments().iter().for_each(|segment_id| {
+            let path = format!("{}/{segment_id}.wal", self.working_directory.display());
+            eprintln!("Removing {path}");
+            std::fs::remove_file(&path).unwrap()
+        });
+        self.wal.clear_segments();
+    }
+
     /// Force a compaction cycle to occur.
     ///
     /// This operates as a full compaction. Taking all data from various sstables
@@ -175,6 +186,8 @@ impl Lsm {
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+
     use tempdir::TempDir;
     use walkdir::WalkDir;
 
@@ -186,19 +199,24 @@ mod test {
 
     use super::Lsm;
 
-    #[test]
-    fn crud() {
-        let dir = TempDir::new("crud").unwrap();
+    // Helper for creating an [`Lsm`] store within a test directory
+    fn create_lsm(dir: &TempDir, wal_max_size: u64, memtable_max_size: u64) -> Lsm {
         let w = WalConfig {
             id: 0,
-            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
+            max_size: wal_max_size,
             log_directory: dir.path().to_path_buf(),
         };
         let m = MemtableConfig {
             id: 0,
-            max_size: MEMTABLE_MAX_SIZE_BYTES,
+            max_size: memtable_max_size,
         };
-        let mut lsm = Lsm::new(w, m);
+        Lsm::new(w, m)
+    }
+
+    #[test]
+    fn crud() {
+        let dir = TempDir::new("crud").unwrap();
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
@@ -228,16 +246,7 @@ mod test {
     #[test]
     fn compaction() {
         let dir = TempDir::new("compaction").unwrap();
-        let w = WalConfig {
-            id: 0,
-            max_size: WAL_MAX_SEGMENT_SIZE_BYTES,
-            log_directory: dir.path().to_path_buf(),
-        };
-        let m = MemtableConfig {
-            id: 0,
-            max_size: 1024,
-        };
-        let mut lsm = Lsm::new(w, m);
+        let mut lsm = create_lsm(&dir, 1024, 1024);
 
         let dir_size = || {
             let entries = WalkDir::new(dir.path()).into_iter();
@@ -283,6 +292,43 @@ mod test {
             lsm.sstables.len(),
             0,
             "L1 SSTables on disk should be 0 after a full compaction cycle"
+        );
+    }
+
+    #[test]
+    fn segment_cleanup() {
+        let dir = TempDir::new("segment_cleanup").unwrap();
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        for i in 0..100 {
+            lsm.insert(
+                format!("foo{i}").into_bytes(),
+                format!("bar{i}").into_bytes(),
+            );
+        }
+
+        assert_eq!(lsm.wal.id(), 0);
+        for _ in 1..=5 {
+            // Force rotations
+            lsm.wal.rotate();
+            lsm.rotate_memtable();
+        }
+        assert_eq!(lsm.wal.id(), 5);
+        assert_eq!(lsm.wal.closed_segments().len(), 5);
+
+        for i in 0..=5 {
+            assert!(
+                Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists(),
+                "WAL segments should exist after rotation"
+            );
+        }
+        lsm.remove_closed_segments();
+        for i in 0..5 {
+            assert!(!Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists());
+        }
+        assert_eq!(
+            lsm.wal.closed_segments().len(),
+            0,
+            "No closed segments remaining after removal",
         );
     }
 }
