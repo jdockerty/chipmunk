@@ -96,15 +96,9 @@ impl Lsm {
     /// has been flushed to an [`SSTable`].
     pub fn remove_closed_segments(&mut self) {
         self.wal.closed_segments().iter().for_each(|segment_id| {
-            println!(
-                "Removing {}/{segment_id}.wal",
-                self.working_directory.display()
-            );
-            std::fs::remove_file(format!(
-                "{}/{segment_id}.wal",
-                self.working_directory.display()
-            ))
-            .unwrap()
+            let path = format!("{}/{segment_id}.wal", self.working_directory.display());
+            eprintln!("Removing {path}");
+            std::fs::remove_file(&path).unwrap()
         });
         self.wal.clear_segments();
     }
