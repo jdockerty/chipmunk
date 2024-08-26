@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU64;
 use bytes::Bytes;
 
 use crate::{
+    config::{MemtableConfig, WalConfig},
     memtable::Memtable,
     wal::{Wal, WalEntry},
 };
@@ -31,19 +32,6 @@ pub struct Lsm {
     l2_files: Vec<u64>,
 
     working_directory: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct WalConfig {
-    id: u64,
-    max_size: u64,
-    log_directory: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct MemtableConfig {
-    id: u64,
-    max_size: u64,
 }
 
 impl Lsm {
