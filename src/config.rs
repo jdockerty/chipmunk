@@ -30,7 +30,6 @@ impl MemtableConfig {
 }
 
 pub struct ChipmunkConfig {
-    pub addr: String,
     pub wal: WalConfig,
     pub memtable: MemtableConfig,
 }
