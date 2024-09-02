@@ -141,8 +141,8 @@ impl Lsm {
     /// all options, the value does not exist.
     ///
     /// TODO: Improve retrieval through use of a bloom filter
-    pub fn get(&mut self, key: &'static [u8]) -> Option<Vec<u8>> {
-        match self.memtable.get(key) {
+    pub fn get(&mut self, key: Vec<u8>) -> Option<Vec<u8>> {
+        match self.memtable.get(&key) {
             Some(v) => Some(v.to_vec()),
             None => {
                 for memtable_id in self.sstables.iter().rev() {
@@ -150,7 +150,7 @@ impl Lsm {
                         self.working_directory
                             .join(format!("sstable-{memtable_id}")),
                     );
-                    match memtable.get(key) {
+                    match memtable.get(key.as_slice()) {
                         Some(Some(v)) => return Some(v.to_vec()),
                         None | Some(None) => continue,
                     };

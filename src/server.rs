@@ -57,11 +57,7 @@ async fn add_kv_handler(
                 .unwrap();
             StatusCode::NO_CONTENT.into_response()
         }
-        None => (
-            StatusCode::BAD_REQUEST,
-            "Must provide key=value format",
-        )
-            .into_response(),
+        None => (StatusCode::BAD_REQUEST, "Must provide key=value format").into_response(),
     }
 }
 
@@ -78,11 +74,19 @@ pub struct ChipmunkHandle {
 impl ChipmunkHandle {
     pub fn new(addr: String, config: ChipmunkConfig) -> Self {
         let (tx, rx) = channel();
-        let c = Chipmunk::new(config, rx);
+        let mut c = Chipmunk::new(config, rx);
 
         std::thread::spawn(move || {
             while let Ok(msg) = c.store_rx.recv() {
-                eprintln!("Got msg {msg:?}");
+                match msg {
+                    Msg::Get { ref key } => {
+                        c.store().get(key.to_vec());
+                    }
+                    Msg::Insert { ref key, ref value } => {
+                        c.store().insert(key.to_vec(), value.to_vec())
+                    }
+                    Msg::Delete { ref key } => c.store().delete(key.to_vec()),
+                }
             }
         });
 
@@ -96,8 +100,8 @@ impl ChipmunkHandle {
         self.store_tx.clone()
     }
 
-    /// Starts the handle, which corresponds to handling incoming requests via
-    /// TCP. These are automatically handed off to the [`Chipmunk`] store
+    /// Starts the handle, which corresponds to handling incoming requests over
+    /// HTTP. These are automatically handed off to the [`Chipmunk`] store
     /// through actor pattern.
     pub async fn start(&self, app: Router) {
         let listener = TcpListener::bind(&self.server_addr).await.unwrap();
@@ -121,6 +125,10 @@ impl Chipmunk {
             store: Lsm::new(config.wal, config.memtable),
             store_rx: rx,
         }
+    }
+
+    pub fn store(&mut self) -> &mut Lsm {
+        &mut self.store
     }
 }
 

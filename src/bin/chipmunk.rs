@@ -18,7 +18,7 @@ async fn main() {
     };
 
     let handle = ChipmunkHandle::new("127.0.0.1:5000".to_string(), config);
-    eprintln!("Listening on 127.0.0.1:5000");
+    eprintln!("Listening on http://127.0.0.1:5000");
     handle
         .start(chipmunk::server::new_app(handle.sender()))
         .await;
