@@ -1,4 +1,6 @@
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -41,14 +43,26 @@ async fn delete_key_handler(Path(key): Path<String>, State(state): State<Sender<
         .unwrap();
 }
 
-async fn add_kv_handler(State(state): State<Sender<Msg>>) {
-    println!("Adding kv");
-    state
-        .send(Msg::Insert {
-            key: "".into(),
-            value: "".into(),
-        })
-        .unwrap();
+async fn add_kv_handler(
+    State(state): State<Sender<Msg>>,
+    req: String,
+) -> impl axum::response::IntoResponse {
+    match req.split_once("=") {
+        Some((key, value)) => {
+            state
+                .send(Msg::Insert {
+                    key: key.as_bytes().to_vec(),
+                    value: value.as_bytes().to_vec(),
+                })
+                .unwrap();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        None => (
+            StatusCode::BAD_REQUEST,
+            "Must provide key=value format",
+        )
+            .into_response(),
+    }
 }
 
 /// The `ChipmunkHandle` takes care of passing messages (key-value pairs) from
