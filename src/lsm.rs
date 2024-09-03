@@ -15,7 +15,7 @@ use crate::{
 pub struct Lsm {
     /// Write-ahead Log (WAL) which backs the operations performed on the LSM
     /// storage engine.
-    wal: Wal,
+    wal: std::sync::Mutex<Wal>,
     /// The configuration which was used to initialise the [`Wal`].
     wal_config: WalConfig,
 
@@ -26,7 +26,7 @@ pub struct Lsm {
 
     /// IDs of the now immutable memtables
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
-    sstables: Vec<u64>,
+    sstables: std::sync::Mutex<Vec<u64>>,
 
     l2_id: AtomicU64,
     l2_files: Vec<u64>,
@@ -41,9 +41,10 @@ impl Lsm {
                 wal_config.id,
                 wal_config.log_directory.clone(),
                 wal_config.max_size,
-            ),
+            )
+            .into(),
             memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
-            sstables: Vec::new(),
+            sstables: Vec::new().into(),
             l2_id: AtomicU64::new(0),
             l2_files: Vec::new(),
             working_directory: wal_config.log_directory.clone(),
@@ -56,13 +57,15 @@ impl Lsm {
     ///
     /// A [`WalEntry`] is appended into the WAL before proceeding to insert the
     /// key-value pair into an in-memory index, the L0 [`Memtable`].
-    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) {
         let entry = WalEntry::Put {
             key: key.to_vec(),
             value: value.to_vec(),
         };
 
-        self.wal.append(vec![entry]);
+        {
+            self.wal.lock().unwrap().append(vec![entry]);
+        }
 
         self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
@@ -75,20 +78,21 @@ impl Lsm {
     ///
     /// TODO: can we hold the various sealed tables in memory too for reduced I/O
     /// on get(k)?
-    pub fn rotate_memtable(&mut self) {
-        self.sstables.push(self.memtable.id());
+    pub fn rotate_memtable(&self) {
+        self.sstables.lock().unwrap().push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());
     }
 
     /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
     /// has been flushed to an [`SSTable`].
-    pub fn remove_closed_segments(&mut self) {
-        self.wal.closed_segments().iter().for_each(|segment_id| {
+    pub fn remove_closed_segments(&self) {
+        let mut wal = self.wal.lock().unwrap();
+        wal.closed_segments().iter().for_each(|segment_id| {
             let path = format!("{}/{segment_id}.wal", self.working_directory.display());
             eprintln!("Removing {path}");
             std::fs::remove_file(&path).unwrap()
         });
-        self.wal.clear_segments();
+        wal.clear_segments();
     }
 
     /// Force a compaction cycle to occur.
@@ -100,28 +104,31 @@ impl Lsm {
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         let mut insert_count = 0;
         let mut skip_count = 0;
-        for l1_file_id in &self.sstables {
-            let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
-            eprintln!("Compacting L1 file: {l1_file:?}");
-            let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
+        {
+            let mut sstables = self.sstables.lock().unwrap();
+            for l1_file_id in &*sstables {
+                let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
+                eprintln!("Compacting L1 file: {l1_file:?}");
+                let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
 
-            for (k, v) in tree {
-                if let Some(v) = v {
-                    insert_count += 1;
-                    eprintln!(
-                        "[Compaction] Inserting {} for L2",
-                        String::from_utf8_lossy(&k)
-                    );
-                    // Only insert values which are NOT tombstones
-                    l2_tree.insert(k, v);
-                } else {
-                    skip_count += 1;
+                for (k, v) in tree {
+                    if let Some(v) = v {
+                        insert_count += 1;
+                        eprintln!(
+                            "[Compaction] Inserting {} for L2",
+                            String::from_utf8_lossy(&k)
+                        );
+                        // Only insert values which are NOT tombstones
+                        l2_tree.insert(k, v);
+                    } else {
+                        skip_count += 1;
+                    }
                 }
+                std::fs::remove_file(l1_file)
+                    .expect("Can always remove existing SSTable after compaction");
             }
-            std::fs::remove_file(l1_file)
-                .expect("Can always remove existing SSTable after compaction");
+            sstables.clear();
         }
-        self.sstables.clear();
         eprintln!("[Compaction] Insertion count: {insert_count}");
         eprintln!("[Compaction] Skip count: {skip_count}");
 
@@ -141,11 +148,11 @@ impl Lsm {
     /// all options, the value does not exist.
     ///
     /// TODO: Improve retrieval through use of a bloom filter
-    pub fn get(&mut self, key: Vec<u8>) -> Option<Vec<u8>> {
+    pub fn get(&self, key: Vec<u8>) -> Option<Vec<u8>> {
         match self.memtable.get(&key) {
             Some(v) => Some(v.to_vec()),
             None => {
-                for memtable_id in self.sstables.iter().rev() {
+                for memtable_id in self.sstables.lock().unwrap().iter().rev() {
                     let memtable = Memtable::load(
                         self.working_directory
                             .join(format!("sstable-{memtable_id}")),
@@ -163,7 +170,10 @@ impl Lsm {
     }
 
     pub fn delete(&mut self, key: Vec<u8>) {
-        self.wal.append(vec![WalEntry::Delete { key: key.clone() }]);
+        self.wal
+            .lock()
+            .unwrap()
+            .append(vec![WalEntry::Delete { key: key.clone() }]);
         self.memtable.delete(key);
     }
 
@@ -208,9 +218,9 @@ mod test {
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
-        assert_eq!(lsm.get(b"foo"), Some(b"bar".to_vec()));
-        assert_ne!(lsm.wal.size(), 0);
-        let wal_size_after_put = lsm.wal.size();
+        assert_eq!(lsm.get(b"foo".to_vec()), Some(b"bar".to_vec()));
+        assert_ne!(lsm.wal.lock().unwrap().size(), 0);
+        let wal_size_after_put = lsm.wal.lock().unwrap().size();
 
         lsm.rotate_memtable();
         assert_eq!(
@@ -219,14 +229,14 @@ mod test {
             "Engine should have a new memtable after flush"
         );
         assert_eq!(
-            lsm.get(b"foo"),
+            lsm.get(b"foo".to_vec()),
             Some(b"bar".to_vec()),
             "Value should be found in sstable on disk"
         );
 
         lsm.delete(b"foo".to_vec());
         assert!(
-            lsm.wal.size() > wal_size_after_put,
+            lsm.wal.lock().unwrap().size() > wal_size_after_put,
             "Deletion should append to the WAL"
         );
     }
@@ -277,7 +287,7 @@ mod test {
             "Memtable rotation should increment the ID"
         );
         assert_eq!(
-            lsm.sstables.len(),
+            lsm.sstables.lock().unwrap().len(),
             0,
             "L1 SSTables on disk should be 0 after a full compaction cycle"
         );
@@ -286,7 +296,7 @@ mod test {
     #[test]
     fn segment_cleanup() {
         let dir = TempDir::new("segment_cleanup").unwrap();
-        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
         for i in 0..100 {
             lsm.insert(
                 format!("foo{i}").into_bytes(),
@@ -294,14 +304,14 @@ mod test {
             );
         }
 
-        assert_eq!(lsm.wal.id(), 0);
+        assert_eq!(lsm.wal.lock().unwrap().id(), 0);
         for _ in 1..=5 {
             // Force rotations
-            lsm.wal.rotate();
+            lsm.wal.lock().unwrap().rotate();
             lsm.rotate_memtable();
         }
-        assert_eq!(lsm.wal.id(), 5);
-        assert_eq!(lsm.wal.closed_segments().len(), 5);
+        assert_eq!(lsm.wal.lock().unwrap().id(), 5);
+        assert_eq!(lsm.wal.lock().unwrap().closed_segments().len(), 5);
 
         for i in 0..=5 {
             assert!(
@@ -314,7 +324,7 @@ mod test {
             assert!(!Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists());
         }
         assert_eq!(
-            lsm.wal.closed_segments().len(),
+            lsm.wal.lock().unwrap().closed_segments().len(),
             0,
             "No closed segments remaining after removal",
         );

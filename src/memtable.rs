@@ -10,6 +10,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use dashmap::DashMap;
 
 use crate::wal::{Wal, WalEntry};
 
@@ -18,7 +19,7 @@ pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 #[derive(Debug)]
 pub struct Memtable {
     id: AtomicU64,
-    tree: BTreeMap<Bytes, Option<Bytes>>,
+    tree: DashMap<Bytes, Option<Bytes>>,
 
     /// Approximate size of the [`Memtable`]. This is an approximation as it simply
     /// uses the values to increment size - simply because for most cases the values
@@ -31,7 +32,7 @@ impl Memtable {
     pub fn new(id: u64, max_size: u64) -> Self {
         Self {
             id: AtomicU64::new(id),
-            tree: BTreeMap::new(),
+            tree: DashMap::new(),
             approximate_size: AtomicU64::new(0),
             max_size,
         }
@@ -56,7 +57,7 @@ impl Memtable {
     }
 
     /// Put a key-value pair into the [`Memtable`].
-    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) {
         eprintln!(
             "Inserting {}={}",
             String::from_utf8_lossy(&key),
@@ -70,10 +71,11 @@ impl Memtable {
     }
 
     /// Get a value pair from the [`Memtable`].
-    pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         match self.tree.get(key) {
-            Some(Some(v)) => Some(v),
-            Some(None) | None => None, // Tombstone or nonexistent
+            Some(v) if v.value().is_none() => None,
+            Some(v) => Some(v.value().as_ref().unwrap().to_vec()),
+            None => None,
         }
     }
 
@@ -85,10 +87,8 @@ impl Memtable {
 
     /// Write the [`Memtable`] to disk, this then becomes a Sorted String Table
     /// (SSTable) and is immutable.
-    pub fn flush(&mut self, flush_dir: PathBuf) {
+    pub fn flush(&self, flush_dir: PathBuf) {
         let data = bincode::serialize(&self.tree).unwrap();
-
-        self.tree = BTreeMap::new();
         // Flushing should happen after a put, therefore the "happens-before"
         // relationship is maintained here. So we can use Relaxed.
         self.approximate_size.store(0, Ordering::Relaxed);
@@ -101,6 +101,7 @@ impl Memtable {
         eprintln!("Flushing to {flush_path:?}");
 
         std::fs::write(flush_path, data).unwrap();
+        self.tree.clear();
         self.id.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -146,7 +147,7 @@ mod test {
 
         assert_eq!(
             m.get(b"foo"),
-            Some("bar".as_bytes()),
+            Some(b"bar".to_vec()),
             "Expected key to exist after put"
         );
 
@@ -156,7 +157,7 @@ mod test {
 
     #[test]
     fn flush_to_sstable() {
-        let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
+        let m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         let flush_dir = TempDir::new("flush").unwrap();
         m.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(
@@ -204,7 +205,7 @@ mod test {
                 0 | 3 | 6 => assert!(m.get(format!("key{i}").as_bytes()).is_none()),
                 _ => assert_eq!(
                     m.get(format!("key{i}").as_bytes()),
-                    Some(format!("value{i}").as_bytes())
+                    Some(format!("value{i}").into_bytes())
                 ),
             }
         }
