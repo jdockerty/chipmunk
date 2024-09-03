@@ -52,7 +52,6 @@ async fn add_kv_handler(
 /// This comprises of the underlying k-v store and server. This utilises the
 /// actor pattern for communication. This is the task portion.
 pub struct Chipmunk {
-    #[allow(dead_code)]
     store: Arc<Lsm>,
 }
 
@@ -70,18 +69,46 @@ impl Chipmunk {
 
 #[cfg(test)]
 mod test {
+    use std::net::SocketAddr;
+
+    use tokio::net::TcpListener;
+
     use tempdir::TempDir;
 
+    use super::*;
     use crate::config::{ChipmunkConfig, MemtableConfig, WalConfig};
 
+    async fn setup_server(conf: ChipmunkConfig) -> SocketAddr {
+        let socket = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let store = Chipmunk::new(conf);
+            let app = new_app(store);
+            axum::serve(socket, app).await.unwrap();
+        });
+        addr
+    }
+
     #[tokio::test]
-    async fn chipmunk() {
-        let t = TempDir::new("t").unwrap();
-        let _conf = ChipmunkConfig {
-            wal: WalConfig::new(0, 1024, t.path().to_path_buf()),
+    async fn chipmunk_write() {
+        let dir = TempDir::new("write_kv").unwrap();
+        let conf = ChipmunkConfig {
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
             memtable: MemtableConfig::new(0, 1024),
         };
+        let addr = setup_server(conf).await;
+        let client = reqwest::Client::new();
+        let base = format!("http://{addr}/api/v1");
+        client.post(&base).body("key1=value1").send().await.unwrap();
 
-        tokio::spawn(async move {});
+        let got = client
+            .get(format!("{base}/key1"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(got, "value1");
     }
 }
