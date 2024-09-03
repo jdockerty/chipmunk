@@ -13,5 +13,6 @@ serde = { version = "1.0.204", features = ["derive"] }
 tokio = { version = "1.39.3", features = ["full"] }
 
 [dev-dependencies]
+reqwest = "0.12.7"
 tempdir = "0.3.7"
 walkdir = "2.5.0"
