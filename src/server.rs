@@ -22,16 +22,18 @@ async fn get_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-    println!("GET {key}");
     match state.store().get(key.into_bytes()) {
         Some(value) => (value).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-async fn delete_key_handler(Path(key): Path<String>, State(_state): State<Arc<Chipmunk>>) {
-    println!("DELETE {key}");
-    unimplemented!()
+async fn delete_key_handler(
+    Path(key): Path<String>,
+    State(state): State<Arc<Chipmunk>>,
+) -> impl IntoResponse {
+    state.store().delete(key.into_bytes());
+    StatusCode::NO_CONTENT
 }
 
 async fn add_kv_handler(

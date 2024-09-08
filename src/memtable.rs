@@ -80,7 +80,7 @@ impl Memtable {
     }
 
     /// Delete a key-value pair from the [`Memtable`].
-    pub fn delete(&mut self, key: Vec<u8>) {
+    pub fn delete(&self, key: Vec<u8>) {
         eprintln!("Deleting {}", String::from_utf8_lossy(&key));
         self.tree.insert(key.into(), None);
     }
@@ -142,7 +142,7 @@ mod test {
 
     #[test]
     fn crud_operations() {
-        let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
+        let m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
         m.insert(b"foo".to_vec(), b"bar".to_vec());
 
         assert_eq!(
