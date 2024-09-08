@@ -80,6 +80,10 @@ mod test {
     use super::*;
     use crate::config::{ChipmunkConfig, MemtableConfig, WalConfig};
 
+    fn get_base_uri(addr: SocketAddr) -> String {
+        format!("http://{addr}/api/v1")
+    }
+
     async fn setup_server(conf: ChipmunkConfig) -> SocketAddr {
         let socket = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = socket.local_addr().unwrap();
@@ -92,7 +96,26 @@ mod test {
     }
 
     #[tokio::test]
-    async fn chipmunk_write() {
+    async fn chipmunk_invalid_add() {
+        let dir = TempDir::new("invalid_post").unwrap();
+        let conf = ChipmunkConfig {
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
+            memtable: MemtableConfig::new(0, 1024),
+        };
+        let addr = setup_server(conf).await;
+        let client = reqwest::Client::new();
+        let base = get_base_uri(addr);
+
+        let response = client.post(&base).body("key1,value1").send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.text().await.unwrap(),
+            "Must provide key=value format"
+        );
+    }
+
+    #[tokio::test]
+    async fn chipmunk_crud() {
         let dir = TempDir::new("write_kv").unwrap();
         let conf = ChipmunkConfig {
             wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
@@ -100,7 +123,8 @@ mod test {
         };
         let addr = setup_server(conf).await;
         let client = reqwest::Client::new();
-        let base = format!("http://{addr}/api/v1");
+        let base = get_base_uri(addr);
+
         client.post(&base).body("key1=value1").send().await.unwrap();
 
         let got = client
@@ -112,5 +136,10 @@ mod test {
             .await
             .unwrap();
         assert_eq!(got, "value1");
+
+        let r = client.delete(format!("{base}/key1")).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let got = client.get(format!("{base}/key1")).send().await.unwrap();
+        assert_eq!(got.status(), StatusCode::NOT_FOUND);
     }
 }
