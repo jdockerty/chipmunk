@@ -169,7 +169,7 @@ impl Lsm {
         }
     }
 
-    pub fn delete(&mut self, key: Vec<u8>) {
+    pub fn delete(&self, key: Vec<u8>) {
         self.wal
             .lock()
             .unwrap()
@@ -214,7 +214,7 @@ mod test {
     #[test]
     fn crud() {
         let dir = TempDir::new("crud").unwrap();
-        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec());
         assert_eq!(lsm.memtable.id(), 0);
