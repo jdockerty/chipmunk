@@ -1,9 +1,11 @@
 use chipmunk::{
     config::{ChipmunkConfig, MemtableConfig, WalConfig},
-    server::ChipmunkHandle,
+    server::Chipmunk,
 };
+use tokio::net::TcpListener;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = ChipmunkConfig {
         wal: WalConfig {
             id: 0,
@@ -16,7 +18,9 @@ fn main() {
         },
     };
 
-    let handle = ChipmunkHandle::new("127.0.0.1:5000".to_string(), config);
-    eprintln!("Listening on tcp://127.0.0.1:5000");
-    handle.start();
+    let c = Chipmunk::new(config);
+    eprintln!("Listening on http://127.0.0.1:5000");
+    let app = chipmunk::server::new_app(c);
+    let listener = TcpListener::bind("127.0.0.1:5000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

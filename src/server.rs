@@ -1,61 +1,51 @@
-use std::{
-    io::Read,
-    net::TcpListener,
-    sync::mpsc::{channel, Receiver, Sender},
-};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
+use axum::Router;
+use std::sync::Arc;
 
 use crate::config::ChipmunkConfig;
 use crate::lsm::Lsm;
 
-/// The `ChipmunkHandle` takes care of passing messages (key-value pairs) from
-/// an incoming stream to the [`Chipmunk`] store.
-///
-/// This utilises the actor pattern. This struct is the handle.
-pub struct ChipmunkHandle {
-    server_addr: String,
-    store_tx: Sender<(Vec<u8>, Vec<u8>)>,
+pub fn new_app(store: Chipmunk) -> Router {
+    let store = Arc::new(store);
+    Router::new()
+        .route("/health", get(|| async move { "OK" }))
+        .route("/api/v1/:key", get(get_key_handler))
+        .route("/api/v1", post(add_kv_handler))
+        .route("/api/v1/:key", delete(delete_key_handler))
+        .with_state(store)
 }
 
-impl ChipmunkHandle {
-    pub fn new(addr: String, config: ChipmunkConfig) -> Self {
-        let (tx, rx) = channel();
-        let c = Chipmunk::new(config, rx);
-
-        std::thread::spawn(move || {
-            while let Ok((key, value)) = c.store_rx.recv() {
-                eprintln!("{key:?}={value:?}");
-            }
-        });
-
-        Self {
-            server_addr: addr,
-            store_tx: tx,
-        }
+async fn get_key_handler(
+    Path(key): Path<String>,
+    State(state): State<Arc<Chipmunk>>,
+) -> impl IntoResponse {
+    match state.store().get(key.into_bytes()) {
+        Some(value) => (value).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
+}
 
-    /// Starts the handle, which corresponds to handling incoming requests via
-    /// TCP. These are automatically handed off to the [`Chipmunk`] store
-    /// through actor pattern.
-    pub fn start(&self) {
-        let listener = TcpListener::bind(&self.server_addr).unwrap();
-        for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            let mut buf = String::new();
-            stream.read_to_string(&mut buf).unwrap();
-            let buf = buf.trim().split(|x| x == '=').collect::<Vec<_>>();
+async fn delete_key_handler(
+    Path(key): Path<String>,
+    State(state): State<Arc<Chipmunk>>,
+) -> impl IntoResponse {
+    state.store().delete(key.into_bytes());
+    StatusCode::NO_CONTENT
+}
 
-            match (buf.first(), buf.get(1)) {
-                (Some(key), Some(value)) => {
-                    eprintln!("{key}={value}");
-                    self.store_tx
-                        .send((key.as_bytes().to_vec(), value.as_bytes().to_vec()))
-                        .unwrap();
-                }
-                (None, _) | (Some(_), None) => {
-                    eprintln!("Did not get key=value format");
-                }
-            }
+async fn add_kv_handler(
+    State(state): State<Arc<Chipmunk>>,
+    req: String,
+) -> impl axum::response::IntoResponse {
+    match req.split_once("=") {
+        Some((key, value)) => {
+            state.store().insert(key.into(), value.into());
+            StatusCode::NO_CONTENT.into_response()
         }
+        None => (StatusCode::BAD_REQUEST, "Must provide key=value format").into_response(),
     }
 }
 
@@ -64,39 +54,92 @@ impl ChipmunkHandle {
 /// This comprises of the underlying k-v store and server. This utilises the
 /// actor pattern for communication. This is the task portion.
 pub struct Chipmunk {
-    #[allow(dead_code)]
-    store: Lsm,
-    store_rx: Receiver<(Vec<u8>, Vec<u8>)>,
+    store: Arc<Lsm>,
 }
 
 impl Chipmunk {
-    pub fn new(config: ChipmunkConfig, rx: Receiver<(Vec<u8>, Vec<u8>)>) -> Self {
+    pub fn new(config: ChipmunkConfig) -> Self {
         Self {
-            store: Lsm::new(config.wal, config.memtable),
-            store_rx: rx,
+            store: Arc::new(Lsm::new(config.wal, config.memtable)),
         }
+    }
+
+    pub fn store(&self) -> &Lsm {
+        &self.store
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::net::SocketAddr;
+
+    use tokio::net::TcpListener;
+
     use tempdir::TempDir;
 
+    use super::*;
     use crate::config::{ChipmunkConfig, MemtableConfig, WalConfig};
 
-    use super::ChipmunkHandle;
+    fn get_base_uri(addr: SocketAddr) -> String {
+        format!("http://{addr}/api/v1")
+    }
 
-    #[test]
-    fn chipmunk() {
-        let t = TempDir::new("t").unwrap();
+    async fn setup_server(conf: ChipmunkConfig) -> SocketAddr {
+        let socket = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let store = Chipmunk::new(conf);
+            let app = new_app(store);
+            axum::serve(socket, app).await.unwrap();
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn chipmunk_invalid_add() {
+        let dir = TempDir::new("invalid_post").unwrap();
         let conf = ChipmunkConfig {
-            wal: WalConfig::new(0, 1024, t.path().to_path_buf()),
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
             memtable: MemtableConfig::new(0, 1024),
         };
+        let addr = setup_server(conf).await;
+        let client = reqwest::Client::new();
+        let base = get_base_uri(addr);
 
-        std::thread::spawn(move || {
-            let handle = ChipmunkHandle::new("127.0.0.1:55555".to_string(), conf);
-            handle.start();
-        });
+        let response = client.post(&base).body("key1,value1").send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.text().await.unwrap(),
+            "Must provide key=value format"
+        );
+    }
+
+    #[tokio::test]
+    async fn chipmunk_crud() {
+        let dir = TempDir::new("write_kv").unwrap();
+        let conf = ChipmunkConfig {
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
+            memtable: MemtableConfig::new(0, 1024),
+        };
+        let addr = setup_server(conf).await;
+        let client = reqwest::Client::new();
+        let base = get_base_uri(addr);
+
+        client.post(&base).body("key1=value1").send().await.unwrap();
+
+        let got = client
+            .get(format!("{base}/key1"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(got, "value1");
+
+        let r = client.delete(format!("{base}/key1")).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let got = client.get(format!("{base}/key1")).send().await.unwrap();
+        assert_eq!(got.status(), StatusCode::NOT_FOUND);
     }
 }
