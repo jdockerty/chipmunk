@@ -41,7 +41,7 @@ impl Memtable {
     /// Restore the [`Memtable`] through reading the WAL files which are in the
     /// provided directory.
     pub fn restore(&mut self, dir: &Path) {
-        let wal_files = std::fs::read_dir(&dir).expect("Can read set log_directory");
+        let wal_files = std::fs::read_dir(dir).expect("Can read set log_directory");
         for w in wal_files {
             let w = w.expect("Valid file within log directory");
             let wal_file = File::open(w.path()).expect("File from given WAL should exist");
