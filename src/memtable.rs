@@ -5,14 +5,14 @@ use std::{
     collections::BTreeMap,
     fs::File,
     io::{BufRead, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use bytes::Bytes;
 use dashmap::DashMap;
 
-use crate::wal::{Wal, WalEntry};
+use crate::wal::WalEntry;
 
 pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
@@ -38,19 +38,25 @@ impl Memtable {
         }
     }
 
-    pub fn restore(&mut self, wal: Wal) {
-        let wal_file = File::open(wal.path()).expect("File from given WAL should exist");
-        let reader = BufReader::new(wal_file);
+    /// Restore the [`Memtable`] through reading the WAL files which are in the
+    /// provided directory.
+    pub fn restore(&mut self, dir: &Path) {
+        let wal_files = std::fs::read_dir(&dir).expect("Can read set log_directory");
+        for w in wal_files {
+            let w = w.expect("Valid file within log directory");
+            let wal_file = File::open(w.path()).expect("File from given WAL should exist");
+            let reader = BufReader::new(wal_file);
 
-        for line in reader.lines() {
-            let line = line.unwrap();
-            let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
-            match entry {
-                WalEntry::Put { key, value } => {
-                    self.tree.insert(key.into(), Some(value.into()));
-                }
-                WalEntry::Delete { key } => {
-                    self.tree.insert(key.into(), None);
+            for line in reader.lines() {
+                let line = line.unwrap();
+                let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
+                match entry {
+                    WalEntry::Put { key, value } => {
+                        self.tree.insert(key.into(), Some(value.into()));
+                    }
+                    WalEntry::Delete { key } => {
+                        self.tree.insert(key.into(), None);
+                    }
                 }
             }
         }
@@ -180,7 +186,7 @@ mod test {
     fn wal_replay() {
         let wal_dir = TempDir::new("replay").unwrap();
 
-        let mut wal = Wal::new(0, wal_dir.into_path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, wal_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
         for i in 0..10 {
             match i {
                 0 | 3 | 6 => wal.append(vec![WalEntry::Delete {
@@ -198,7 +204,7 @@ mod test {
         }
 
         let mut m = Memtable::new(0, MEMTABLE_MAX_SIZE_BYTES);
-        m.restore(wal);
+        m.restore(wal_dir.path());
 
         for i in 0..10 {
             match i {
