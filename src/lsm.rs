@@ -39,7 +39,7 @@ impl Lsm {
         Self {
             wal: Wal::new(
                 wal_config.id,
-                wal_config.log_directory.clone(),
+                &wal_config.log_directory,
                 wal_config.max_size,
             )
             .into(),
