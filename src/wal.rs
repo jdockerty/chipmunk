@@ -151,16 +151,25 @@ mod test {
 
     const TINY_WAL_MAX_SIZE: u64 = 10;
 
+    fn put_entries() -> Vec<WalEntry> {
+        vec![
+            WalEntry::Put {
+                key: b"foo".to_vec(),
+                value: b"bar".to_vec(),
+            },
+            WalEntry::Put {
+                key: b"baz".to_vec(),
+                value: b"qux".to_vec(),
+            },
+        ]
+    }
+
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(0, temp_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
-        let entry = WalEntry::Put {
-            key: b"foo".to_vec(),
-            value: b"bar".to_vec(),
-        };
-        let wrote = wal.append(vec![entry]);
+        let wrote = wal.append(put_entries());
         assert_eq!(wal.current_size, wrote);
 
         let file = std::fs::File::open(wal.path()).unwrap();
