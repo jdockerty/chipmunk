@@ -186,7 +186,7 @@ mod test {
     fn wal_replay() {
         let wal_dir = TempDir::new("replay").unwrap();
 
-        let mut wal = Wal::new(0, wal_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, wal_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
         for i in 0..10 {
             match i {
                 0 | 3 | 6 => wal.append(vec![WalEntry::Delete {

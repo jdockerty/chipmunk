@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
@@ -35,7 +35,7 @@ struct Segment {
 }
 
 impl Segment {
-    pub fn new(id: u64, path: PathBuf) -> Self {
+    pub fn new(id: u64, path: &Path) -> Self {
         let id = AtomicU64::new(id);
         let log_file_path = format!(
             "{}/{}.wal",
@@ -71,9 +71,9 @@ pub enum WalEntry {
 }
 
 impl Wal {
-    pub fn new(id: u64, log_directory: PathBuf, max_size: u64) -> Self {
+    pub fn new(id: u64, log_directory: &Path, max_size: u64) -> Self {
         Self {
-            log_directory: log_directory.clone(),
+            log_directory: log_directory.to_path_buf(),
             current_size: 0,
             max_size,
             buffer: Vec::new(),
@@ -114,7 +114,7 @@ impl Wal {
 
         let current_id = self.segment.id();
         self.closed_segments.push(current_id);
-        let new_segment = Segment::new(current_id + 1, self.log_directory.clone());
+        let new_segment = Segment::new(current_id + 1, &self.log_directory);
         self.current_size = 0;
         self.segment = new_segment;
     }
@@ -167,7 +167,7 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
         let wrote = wal.append(put_entries());
         assert_eq!(wal.current_size, wrote);
@@ -190,7 +190,7 @@ mod test {
                 value: b"bar".to_vec(),
             });
         }
-        let mut wal = Wal::new(1, temp_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
         let wrote = wal.append(entries);
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
@@ -209,14 +209,14 @@ mod test {
     #[test]
     fn id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.into_path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
         assert_eq!(wal.segment.id(), 0);
     }
 
     #[test]
     fn wal_path() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.path().to_path_buf(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
         assert_eq!(
             wal.path(),
             temp_dir.into_path().join("0.wal"),
@@ -227,7 +227,7 @@ mod test {
     #[test]
     fn rotation() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.into_path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
         for _ in 0..3 {
             wal.append(vec![WalEntry::Put {
