@@ -29,7 +29,7 @@ pub struct Lsm {
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: std::sync::Mutex<Vec<u64>>,
 
-    bloom: BloomFilter<Vec<u8>>,
+    bloom: std::sync::Mutex<BloomFilter<Vec<u8>>>,
 
     l2_id: AtomicU64,
     l2_files: Vec<u64>,
@@ -53,7 +53,7 @@ impl Lsm {
             working_directory: wal_config.log_directory.clone(),
             memtable_config,
             wal_config,
-            bloom: BloomFilter::new(10000, 2),
+            bloom: BloomFilter::new(10000, 2).into(),
         }
     }
 
@@ -69,6 +69,10 @@ impl Lsm {
 
         {
             self.wal.lock().unwrap().append(vec![entry]);
+        }
+
+        {
+            self.bloom.lock().unwrap().insert(key.clone());
         }
 
         self.memtable.insert(key, value);
@@ -191,8 +195,10 @@ impl Lsm {
     /// # Note
     /// As this is **only** a bloom filter check, this can return false positives
     /// but not false negatives.
-    pub fn check(&mut self, key: Vec<u8>) -> bool {
-        self.bloom.check(key)
+    pub fn check(&self, key: Vec<u8>) -> bool {
+        // TODO: this could be a read lock (ideally nothing), but the underlying
+        // filter takes a mutable reference when it should not.
+        self.bloom.lock().unwrap().check(key)
     }
 }
 
@@ -310,11 +316,12 @@ mod test {
     #[test]
     fn bloom() {
         let dir = TempDir::new("bloom").unwrap();
-        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec());
 
         assert!(lsm.check(b"foo".to_vec()));
+        assert!(!lsm.check(b"baz".to_vec()));
     }
 
     #[test]
