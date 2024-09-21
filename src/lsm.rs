@@ -308,6 +308,16 @@ mod test {
     }
 
     #[test]
+    fn bloom() {
+        let dir = TempDir::new("bloom").unwrap();
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+
+        lsm.insert(b"foo".to_vec(), b"bar".to_vec());
+
+        assert!(lsm.check(b"foo".to_vec()));
+    }
+
+    #[test]
     fn segment_cleanup() {
         let dir = TempDir::new("segment_cleanup").unwrap();
         let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
