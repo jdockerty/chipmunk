@@ -141,16 +141,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
 name = "bitflags"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b048fb63fd8b5923fc5aa7b340d8e156aec7ec02f0c78fa8a6ddc2613f6f71de"
 
 [[package]]
+name = "bloomfx"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f00c73937a7adc5f3acf44bc5fc1d6169a1b355e14c34d6c97b63ada55ef5767"
+dependencies = [
+ "bit-vec",
+ "fxhash",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79296716171880943b8470b5f8d03aa55eb2e645a4874bdbb28adb49162e012c"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -179,6 +201,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bincode",
+ "bloomfx",
  "bytes",
  "chrono",
  "dashmap",
@@ -344,6 +367,15 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "pin-utils",
+]
+
+[[package]]
+name = "fxhash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]

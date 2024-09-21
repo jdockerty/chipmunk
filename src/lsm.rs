@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
+use bloomfx::BloomFilter;
 use bytes::Bytes;
 
 use crate::{
@@ -28,6 +29,8 @@ pub struct Lsm {
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: std::sync::Mutex<Vec<u64>>,
 
+    bloom: BloomFilter<Vec<u8>>,
+
     l2_id: AtomicU64,
     l2_files: Vec<u64>,
 
@@ -50,6 +53,7 @@ impl Lsm {
             working_directory: wal_config.log_directory.clone(),
             memtable_config,
             wal_config,
+            bloom: BloomFilter::new(10000, 2),
         }
     }
 
@@ -179,6 +183,16 @@ impl Lsm {
 
     pub fn memtable_id(&self) -> u64 {
         self.memtable.id()
+    }
+
+    /// Quickly check whether a key is within the LSM-tree, utilising the internal
+    /// bloom filter.
+    ///
+    /// # Note
+    /// As this is **only** a bloom filter check, this can return false positives
+    /// but not false negatives.
+    pub fn check(&mut self, key: Vec<u8>) -> bool {
+        self.bloom.check(key)
     }
 }
 
