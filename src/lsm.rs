@@ -343,6 +343,19 @@ mod test {
 
         assert!(lsm.check(b"foo".to_vec()));
         assert!(!lsm.check(b"baz".to_vec()));
+
+        drop(lsm);
+
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        lsm.restore();
+        assert!(
+            lsm.check(b"foo".to_vec()),
+            "The key 'foo' should exist in the filter after the structure was restored."
+        );
+        assert!(
+            !lsm.check(b"baz".to_vec()),
+            "A value which does not exist should not appear after restore"
+        );
     }
 
     #[test]
