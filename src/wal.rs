@@ -1,7 +1,7 @@
 // TODO: remove once used in other components
 #![allow(dead_code)]
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Lines, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
@@ -82,10 +82,32 @@ impl Wal {
         }
     }
 
-    /// Append one or more key-value pairs to the WAL file.
+    /// Restore the [`Wal`] through reading the files which are in the
+    /// provided directory.
+    pub fn restore(&mut self) {
+        let wal_files = std::fs::read_dir(&self.log_directory).expect("Can read set log_directory");
+        println!("{wal_files:?}");
+        for w in wal_files {
+            let w = w.expect("Valid file within log directory");
+            let wal_file = File::open(w.path()).expect("File from given WAL should exist");
+            let reader = BufReader::new(wal_file);
+
+            for line in reader.lines() {
+                let line = line.unwrap();
+                let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
+                self.append(entry);
+            }
+        }
+    }
+
+    pub fn lines(&self) -> Lines<BufReader<File>> {
+        BufReader::new(std::fs::File::open(&self.log_directory).unwrap()).lines()
+    }
+
+    /// Append a [`WalEntry`] to the WAL file.
     ///
-    pub fn append(&mut self, entries: Vec<WalEntry>) -> u64 {
-        self.append_batch(entries)
+    pub fn append(&mut self, entries: WalEntry) -> u64 {
+        self.append_batch(vec![entries])
     }
 
     /// Append a batch of [`WalEntry`] into the current log file.
@@ -169,7 +191,7 @@ mod test {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
-        let wrote = wal.append(put_entries());
+        let wrote = wal.append_batch(put_entries());
         assert_eq!(wal.current_size, wrote);
 
         let file = std::fs::File::open(wal.path()).unwrap();
@@ -191,7 +213,7 @@ mod test {
             });
         }
         let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
-        let wrote = wal.append(entries);
+        let wrote = wal.append_batch(entries);
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
         for line in wal_file.lines() {
@@ -204,6 +226,42 @@ mod test {
                 WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
             }
         }
+    }
+
+    #[test]
+    fn wal_replay() {
+        let temp_dir = TempDir::new("write_wal").unwrap();
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+
+        let mut wrote = 0;
+        for i in 0..10 {
+            match i {
+                0 | 3 | 6 => {
+                    wrote += wal.append(WalEntry::Delete {
+                        key: format!("key{i}").as_bytes().to_vec(),
+                    })
+                }
+                _ => {
+                    let key = format!("key{i}");
+                    let value = format!("value{i}");
+                    wrote += wal.append(WalEntry::Put {
+                        key: key.as_bytes().to_vec(),
+                        value: value.as_bytes().to_vec(),
+                    })
+                }
+            };
+        }
+        assert_eq!(wal.current_size, wrote);
+
+        // Drop the WAL and perform a restore
+        drop(wal);
+
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        wal.restore();
+        assert_eq!(
+            wal.current_size, wrote,
+            "WAL size should be the same prior to dropping"
+        );
     }
 
     #[test]
@@ -230,10 +288,10 @@ mod test {
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
         for _ in 0..3 {
-            wal.append(vec![WalEntry::Put {
+            wal.append(WalEntry::Put {
                 key: b"foo".to_vec(),
                 value: b"bar".to_vec(),
-            }]);
+            });
         }
 
         assert_eq!(wal.closed_segments.len(), 0, "No closed segments");
