@@ -136,6 +136,15 @@ impl Memtable {
     }
 }
 
+impl IntoIterator for &Memtable {
+    type Item = (Bytes, Option<Bytes>);
+    type IntoIter = dashmap::iter::OwningIter<Bytes, Option<Bytes>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.tree.clone().into_iter()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use tempdir::TempDir;

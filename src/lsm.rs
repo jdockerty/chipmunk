@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
+use bloomfx::BloomFilter;
 use bytes::Bytes;
 
 use crate::{
@@ -28,6 +29,8 @@ pub struct Lsm {
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: std::sync::Mutex<Vec<u64>>,
 
+    bloom: std::sync::Mutex<BloomFilter<Vec<u8>>>,
+
     l2_id: AtomicU64,
     l2_files: Vec<u64>,
 
@@ -50,6 +53,7 @@ impl Lsm {
             working_directory: wal_config.log_directory.clone(),
             memtable_config,
             wal_config,
+            bloom: BloomFilter::new(10000, 2).into(),
         }
     }
 
@@ -66,6 +70,9 @@ impl Lsm {
         {
             self.wal.lock().unwrap().append(vec![entry]);
         }
+
+        // Populate the internal bloom filter
+        self.bloom_insert(key.clone());
 
         self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
@@ -141,31 +148,35 @@ impl Lsm {
         self.l2_files.push(l2_id);
     }
 
-    /// Get a key and corresponding value from the LSM-tree.
+    /// Get a value from the LSM-tree.
     ///
-    /// This first checks whether the value exists in the [`Memtable`] and continues
-    /// the search through persisted SSTables if it does not. After exhausting
-    /// all options, the value does not exist.
-    ///
-    /// TODO: Improve retrieval through use of a bloom filter
+    /// This first checks whether the value has passed through the internal
+    /// [`BloomFilter`] first.
+    /// Afterwards [`Memtable`] is then consulted to search through persisted SSTables
+    /// if it exists.
     pub fn get(&self, key: Vec<u8>) -> Option<Vec<u8>> {
-        match self.memtable.get(&key) {
-            Some(v) => Some(v.to_vec()),
-            None => {
-                for memtable_id in self.sstables.lock().unwrap().iter().rev() {
-                    let memtable = Memtable::load(
-                        self.working_directory
-                            .join(format!("sstable-{memtable_id}")),
-                    );
-                    match memtable.get(key.as_slice()) {
-                        Some(Some(v)) => return Some(v.to_vec()),
-                        None | Some(None) => continue,
-                    };
+        match self.check(key.clone()) {
+            // We can return instantly if the value has not passed through the
+            // filter.
+            false => None,
+            true => match self.memtable.get(&key) {
+                Some(v) => Some(v.to_vec()),
+                None => {
+                    for memtable_id in self.sstables.lock().unwrap().iter().rev() {
+                        let memtable = Memtable::load(
+                            self.working_directory
+                                .join(format!("sstable-{memtable_id}")),
+                        );
+                        match memtable.get(key.as_slice()) {
+                            Some(Some(v)) => return Some(v.to_vec()),
+                            None | Some(None) => continue,
+                        };
+                    }
+                    // Exhausted search of entire structure did not find the key, so
+                    // it does not exist.
+                    None
                 }
-                // Exhausted search of entire structure did not find the key, so
-                // it does not exist.
-                None
-            }
+            },
         }
     }
 
@@ -179,6 +190,36 @@ impl Lsm {
 
     pub fn memtable_id(&self) -> u64 {
         self.memtable.id()
+    }
+
+    /// Restore the LSM-tree by recovering the internal [`Memtable`] and [`BloomFilter`]
+    pub fn restore(&mut self) {
+        self.memtable.restore(&self.working_directory);
+
+        for (k, v) in &self.memtable {
+            if v.is_none() {
+                continue;
+            } else {
+                self.bloom_insert(k.to_vec());
+            }
+        }
+    }
+
+    /// Internal method for inserting into the [`BloomFilter`].
+    fn bloom_insert(&self, key: Vec<u8>) {
+        self.bloom.lock().unwrap().insert(key);
+    }
+
+    /// Quickly check whether a key is within the LSM-tree, utilising the internal
+    /// bloom filter.
+    ///
+    /// # Note
+    /// As this is **only** a bloom filter check, this can return false positives
+    /// but not false negatives.
+    fn check(&self, key: Vec<u8>) -> bool {
+        // TODO: this could be a read lock (ideally nothing), but the underlying
+        // filter takes a mutable reference when it should not.
+        self.bloom.lock().unwrap().check(key)
     }
 }
 
@@ -290,6 +331,30 @@ mod test {
             lsm.sstables.lock().unwrap().len(),
             0,
             "L1 SSTables on disk should be 0 after a full compaction cycle"
+        );
+    }
+
+    #[test]
+    fn bloom() {
+        let dir = TempDir::new("bloom").unwrap();
+        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+
+        lsm.insert(b"foo".to_vec(), b"bar".to_vec());
+
+        assert!(lsm.check(b"foo".to_vec()));
+        assert!(!lsm.check(b"baz".to_vec()));
+
+        drop(lsm);
+
+        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        lsm.restore();
+        assert!(
+            lsm.check(b"foo".to_vec()),
+            "The key 'foo' should exist in the filter after the structure was restored."
+        );
+        assert!(
+            !lsm.check(b"baz".to_vec()),
+            "A value which does not exist should not appear after restore"
         );
     }
 
