@@ -68,7 +68,7 @@ impl Lsm {
         };
 
         {
-            self.wal.lock().unwrap().append(vec![entry]);
+            self.wal.lock().unwrap().append(entry);
         }
 
         // Populate the internal bloom filter
@@ -184,7 +184,7 @@ impl Lsm {
         self.wal
             .lock()
             .unwrap()
-            .append(vec![WalEntry::Delete { key: key.clone() }]);
+            .append(WalEntry::Delete { key: key.clone() });
         self.memtable.delete(key);
     }
 
@@ -194,8 +194,26 @@ impl Lsm {
 
     /// Restore the LSM-tree by recovering the internal [`Memtable`] and [`BloomFilter`]
     pub fn restore(&mut self) {
-        self.memtable.restore(&self.working_directory);
+        {
+            let mut wal = self.wal.lock().unwrap();
+            println!("Restoring WAL");
+            wal.restore();
+            println!("Restoring Memtable");
+            for line in wal.lines() {
+                let line: WalEntry = bincode::deserialize(line.unwrap().as_bytes()).unwrap();
+                match line {
+                    WalEntry::Put { key, value } => {
+                        self.memtable.insert(key, value);
+                    }
+                    WalEntry::Delete { key } => {
+                        self.memtable.delete(key);
+                    }
+                }
+            }
+        }
+        println!("Done");
 
+        println!("Restoring bloom");
         for (k, v) in &self.memtable {
             if v.is_none() {
                 continue;
