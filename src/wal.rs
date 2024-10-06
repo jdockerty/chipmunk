@@ -8,6 +8,8 @@ use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ChipmunkError;
+
 pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
@@ -35,6 +37,12 @@ struct Segment {
 }
 
 impl Segment {
+    /// Create a new [`Segment`].
+    ///
+    /// # Panics
+    ///
+    /// When the underlying file for the segment cannot be created with write
+    /// permissions.
     pub fn new(id: u64, path: &Path) -> Self {
         let id = AtomicU64::new(id);
         let log_file_path = format!(
@@ -46,7 +54,7 @@ impl Segment {
             .create(true)
             .append(true)
             .open(log_file_path)
-            .unwrap();
+            .expect("Segment file must be created");
 
         Self {
             id,
@@ -54,8 +62,11 @@ impl Segment {
         }
     }
 
-    pub fn flush(&mut self) {
-        self.log_file.sync_all().unwrap()
+    pub fn flush(&mut self) -> Result<(), ChipmunkError> {
+        Ok(self
+            .log_file
+            .sync_all()
+            .map_err(ChipmunkError::SegmentFsync)?)
     }
 
     // The current WAL id.
@@ -84,7 +95,7 @@ impl Wal {
 
     /// Restore the [`Wal`] through reading the segment files which are in the
     /// provided directory.
-    pub fn restore(&mut self) {
+    pub fn restore(&mut self) -> Result<(), ChipmunkError> {
         let wal_files = std::fs::read_dir(&self.log_directory).expect("Can read set log_directory");
         for w in wal_files {
             let w = w.expect("Valid file within log directory");
@@ -97,12 +108,18 @@ impl Wal {
             let mut buf = Vec::new();
 
             for line in reader.lines() {
-                let line = line.unwrap();
-                let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
-                buf.push(entry);
+                let line = line.expect("WAL contains valid utf8");
+
+                match bincode::deserialize(line.as_bytes()) {
+                    Ok(entry) => buf.push(entry),
+                    // Invalid entries are skipped and not restored
+                    Err(e) => eprintln!("Invalid entry in segment: {e}"),
+                }
             }
-            self.append_batch(buf);
+            self.append_batch(buf)?;
         }
+
+        Ok(())
     }
 
     /// Return a [`Lines`] iterator over the active segment file.
@@ -119,12 +136,12 @@ impl Wal {
     }
 
     /// Append a [`WalEntry`] to the WAL file.
-    pub fn append(&mut self, entry: WalEntry) -> u64 {
-        self.append_batch(vec![entry])
+    pub fn append(&mut self, entry: WalEntry) -> Result<u64, ChipmunkError> {
+        Ok(self.append_batch(vec![entry])?)
     }
 
     /// Append a batch of [`WalEntry`] into the current log file.
-    fn append_batch(&mut self, entries: Vec<WalEntry>) -> u64 {
+    fn append_batch(&mut self, entries: Vec<WalEntry>) -> Result<u64, ChipmunkError> {
         // Invariant: the buffer should be empty here as it was previously
         // cleared after appending older entries. If the buffer is not empty
         // then we can append duplicate data which may become unbounded in size
@@ -133,10 +150,13 @@ impl Wal {
 
         for e in entries {
             // TODO: create append_entry func which is generic over Write trait
-            bincode::serialize_into(&mut self.buffer, &e).unwrap();
-            writeln!(&mut self.buffer).unwrap();
+            bincode::serialize_into(&mut self.buffer, &e).expect("Can write known entry to buffer");
+            writeln!(&mut self.buffer).map_err(ChipmunkError::WalAppend)?;
         }
-        self.segment.log_file.write_all(&self.buffer).unwrap();
+        self.segment
+            .log_file
+            .write_all(&self.buffer)
+            .map_err(ChipmunkError::WalAppend)?;
         let buffer_size = self.buffer.len() as u64;
         self.current_size += buffer_size;
 
@@ -144,7 +164,7 @@ impl Wal {
         // we risk misinforming the current segment size, as well as appending
         // pre-existing data.
         self.buffer.clear();
-        buffer_size
+        Ok(buffer_size)
     }
 
     /// Get the current path of the active WAL segment file.
@@ -155,15 +175,17 @@ impl Wal {
     /// Rotate the currently active WAL segment file.
     ///
     /// This flushes all operations to the current file before creating a new file.
-    pub fn rotate(&mut self) {
+    pub fn rotate(&mut self) -> Result<(), ChipmunkError> {
         eprintln!("WAL rotation");
-        self.segment.flush();
+        self.segment.flush()?;
 
         let current_id = self.segment.id();
         self.closed_segments.push(current_id);
         let new_segment = Segment::new(current_id + 1, &self.log_directory);
         self.current_size = 0;
         self.segment = new_segment;
+
+        Ok(())
     }
 
     pub fn size(&self) -> u64 {
@@ -216,7 +238,7 @@ mod test {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
 
-        let wrote = wal.append_batch(put_entries());
+        let wrote = wal.append_batch(put_entries()).unwrap();
         assert_eq!(wal.current_size, wrote);
 
         let file = std::fs::File::open(wal.path()).unwrap();
@@ -238,7 +260,7 @@ mod test {
             });
         }
         let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
-        let wrote = wal.append_batch(entries);
+        let wrote = wal.append_batch(entries).unwrap();
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
         for line in wal_file.lines() {
@@ -262,17 +284,21 @@ mod test {
         for i in 0..10 {
             match i {
                 0 | 3 | 6 => {
-                    wrote += wal.append(WalEntry::Delete {
-                        key: format!("key{i}").as_bytes().to_vec(),
-                    })
+                    wrote += wal
+                        .append(WalEntry::Delete {
+                            key: format!("key{i}").as_bytes().to_vec(),
+                        })
+                        .unwrap()
                 }
                 _ => {
                     let key = format!("key{i}");
                     let value = format!("value{i}");
-                    wrote += wal.append(WalEntry::Put {
-                        key: key.as_bytes().to_vec(),
-                        value: value.as_bytes().to_vec(),
-                    })
+                    wrote += wal
+                        .append(WalEntry::Put {
+                            key: key.as_bytes().to_vec(),
+                            value: value.as_bytes().to_vec(),
+                        })
+                        .unwrap();
                 }
             };
         }
@@ -282,7 +308,7 @@ mod test {
         drop(wal);
 
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
-        wal.restore();
+        wal.restore().unwrap();
         assert_eq!(
             wal.current_size, wrote,
             "WAL size should be the same prior to dropping"
@@ -316,13 +342,14 @@ mod test {
             wal.append(WalEntry::Put {
                 key: b"foo".to_vec(),
                 value: b"bar".to_vec(),
-            });
+            })
+            .unwrap();
         }
 
         assert_eq!(wal.closed_segments.len(), 0, "No closed segments");
         assert_eq!(wal.segment.id(), 0);
 
-        wal.rotate();
+        wal.rotate().expect("Can rotate WAL");
 
         assert_eq!(wal.current_size, 0, "WAL size should reset");
         assert_ne!(wal.segment.id(), 0, "WAL rotation has not occurred");
