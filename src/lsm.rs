@@ -192,10 +192,37 @@ impl Lsm {
         self.memtable.id()
     }
 
-    /// Restore the LSM-tree by recovering the internal [`Memtable`] and [`BloomFilter`]
+    /// Restore the LSM-tree by recovering the internal [`Memtable`] and
+    /// [`BloomFilter`].
+    ///
+    /// This works by restoring the WAL and building the memtable from there.
+    /// After this, the bloom filter can be populated.
+    ///
+    /// # Panics
+    /// When a restore operation is conducted when the components are not started
+    /// from scratch - partial restore is not supported.
     pub fn restore(&mut self) {
         {
             let mut wal = self.wal.lock().unwrap();
+            // Invariant: The restore operation implies that there is currently
+            // nothing in any of the components. A partial restore is not supported
+            // at the moment.
+            assert_eq!(
+                wal.size(),
+                0,
+                "WAL size should be 0 for a restore operation"
+            );
+            assert_eq!(
+                self.memtable.len(),
+                0,
+                "Memtable can only be restored from scratch"
+            );
+            assert_eq!(
+                self.memtable.size(),
+                0,
+                "Memtable can only be restored from scratch"
+            );
+
             println!("Restoring WAL");
             wal.restore();
             println!("Restoring Memtable");
@@ -212,9 +239,8 @@ impl Lsm {
                 }
             }
         }
-        println!("Done");
 
-        println!("Restoring bloom");
+        println!("Restoring bloom filter");
         for (k, v) in &self.memtable {
             if v.is_none() {
                 continue;
