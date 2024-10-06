@@ -231,7 +231,7 @@ impl Lsm {
             println!("Restoring WAL");
             wal.restore()?;
             println!("Restoring Memtable");
-            for line in wal.lines() {
+            for line in wal.lines()? {
                 match line {
                     Ok(line) => {
                         let line: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();

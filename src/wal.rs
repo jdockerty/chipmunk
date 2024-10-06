@@ -95,11 +95,16 @@ impl Wal {
     /// Restore the [`Wal`] through reading the segment files which are in the
     /// provided directory.
     pub fn restore(&mut self) -> Result<(), ChipmunkError> {
-        let wal_files = std::fs::read_dir(&self.log_directory).expect("Can read set log_directory");
-        for w in wal_files {
-            let w = w.expect("Valid file within log directory");
-            let wal_file = File::open(w.path()).expect("File from given WAL should exist");
-            let reader = BufReader::new(wal_file);
+        let segment_files = std::fs::read_dir(&self.log_directory).map_err(|e| {
+            ChipmunkError::WalDirectoryOpen {
+                source: e,
+                path: self.log_directory.clone(),
+            }
+        })?;
+        for s in segment_files {
+            let segment = s.expect("Valid file within log directory");
+            let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
+            let reader = BufReader::new(segment_file);
 
             // The segments are bounded by the [`WAL_MAX_SEGMENT_SIZE_BYTES`]
             // so this ensures the files themselves do not become huge for this
@@ -122,16 +127,16 @@ impl Wal {
     }
 
     /// Return a [`Lines`] iterator over the active segment file.
-    pub fn lines(&self) -> Lines<BufReader<File>> {
+    pub fn lines(&self) -> Result<Lines<BufReader<File>>, ChipmunkError> {
         let segment_path = format!(
             "{}/{}.wal",
             self.log_directory.display(),
             self.segment.id.load(Ordering::Relaxed)
         );
-        let segment_file = std::fs::File::open(&segment_path)
-            .expect("Active segment file exists within log_directory");
+        let segment_file =
+            std::fs::File::open(&segment_path).map_err(ChipmunkError::SegmentOpen)?;
 
-        BufReader::new(segment_file).lines()
+        Ok(BufReader::new(segment_file).lines())
     }
 
     /// Append a [`WalEntry`] to the WAL file.
@@ -150,7 +155,7 @@ impl Wal {
         for e in entries {
             // TODO: create append_entry func which is generic over Write trait
             bincode::serialize_into(&mut self.buffer, &e).expect("Can write known entry to buffer");
-            writeln!(&mut self.buffer).map_err(ChipmunkError::WalAppend)?;
+            writeln!(&mut self.buffer).expect("Can write known entry to buffer");
         }
         self.segment
             .log_file
