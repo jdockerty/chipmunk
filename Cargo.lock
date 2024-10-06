@@ -205,6 +205,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dashmap",
+ "parking_lot",
  "reqwest",
  "serde",
  "tempdir",
