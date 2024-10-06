@@ -200,7 +200,8 @@ impl Lsm {
             wal.restore();
             println!("Restoring Memtable");
             for line in wal.lines() {
-                let line: WalEntry = bincode::deserialize(line.unwrap().as_bytes()).unwrap();
+                let line = line.unwrap();
+                let line: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
                 match line {
                     WalEntry::Put { key, value } => {
                         self.memtable.insert(key, value);

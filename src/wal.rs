@@ -105,8 +105,17 @@ impl Wal {
         }
     }
 
+    /// Return a [`Lines`] iterator over the active segment file.
     pub fn lines(&self) -> Lines<BufReader<File>> {
-        BufReader::new(std::fs::File::open(&self.log_directory).unwrap()).lines()
+        let segment_path = format!(
+            "{}/{}.wal",
+            self.log_directory.display(),
+            self.segment.id.load(Ordering::Relaxed)
+        );
+        let segment_file = std::fs::File::open(&segment_path)
+            .expect("Active segment file exists within log_directory");
+
+        BufReader::new(segment_file).lines()
     }
 
     /// Append a [`WalEntry`] to the WAL file.
