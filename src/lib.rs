@@ -16,5 +16,5 @@ pub enum ChipmunkError {
     SegmentFsync(io::Error),
 
     #[error("Could not append to the WAL segment")]
-    WalAppend(io::Error)
+    WalAppend(io::Error),
 }

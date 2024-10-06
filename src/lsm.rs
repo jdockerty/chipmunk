@@ -423,7 +423,8 @@ mod test {
             lsm.insert(
                 format!("foo{i}").into_bytes(),
                 format!("bar{i}").into_bytes(),
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         {

@@ -32,7 +32,6 @@ async fn delete_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-
     match state.store().delete(key.as_bytes().to_vec()) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(e) => {
@@ -42,20 +41,15 @@ async fn delete_key_handler(
     }
 }
 
-async fn add_kv_handler(
-    State(state): State<Arc<Chipmunk>>,
-    req: String,
-) -> impl IntoResponse {
+async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl IntoResponse {
     match req.split_once("=") {
-        Some((key, value)) => {
-            match state.store().insert(key.into(), value.into()) {
-                Ok(_) => StatusCode::NO_CONTENT.into_response(),
-                Err(e) => {
-                    eprintln!("Cannot insert '{key}': {e}");
-                    StatusCode::BAD_REQUEST.into_response()
-                }
+        Some((key, value)) => match state.store().insert(key.into(), value.into()) {
+            Ok(_) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => {
+                eprintln!("Cannot insert '{key}': {e}");
+                StatusCode::BAD_REQUEST.into_response()
             }
-        }
+        },
         None => (StatusCode::BAD_REQUEST, "Must provide key=value format").into_response(),
     }
 }
