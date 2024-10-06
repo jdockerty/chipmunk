@@ -43,7 +43,7 @@ impl Segment {
     ///
     /// When the underlying file for the segment cannot be created with write
     /// permissions.
-    pub fn new(id: u64, path: &Path) -> Self {
+    pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
         let id = AtomicU64::new(id);
         let log_file_path = format!(
             "{}/{}.wal",
@@ -54,12 +54,12 @@ impl Segment {
             .create(true)
             .append(true)
             .open(log_file_path)
-            .expect("Segment file must be created");
+            .map_err(ChipmunkError::SegmentOpen)?;
 
-        Self {
+        Ok(Self {
             id,
             log_file: new_segment,
-        }
+        })
     }
 
     pub fn flush(&mut self) -> Result<(), ChipmunkError> {
@@ -87,7 +87,7 @@ impl Wal {
             current_size: 0,
             max_size,
             buffer: Vec::new(),
-            segment: Segment::new(id, log_directory),
+            segment: Segment::try_new(id, log_directory).unwrap(),
             closed_segments: Vec::new(),
         }
     }
@@ -185,9 +185,8 @@ impl Wal {
 
         let current_id = self.segment.id();
         self.closed_segments.push(current_id);
-        let new_segment = Segment::new(current_id + 1, &self.log_directory);
         self.current_size = 0;
-        self.segment = new_segment;
+        self.segment = Segment::try_new(current_id + 1, &self.log_directory)?;
 
         Ok(())
     }
