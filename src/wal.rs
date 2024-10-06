@@ -63,10 +63,9 @@ impl Segment {
     }
 
     pub fn flush(&mut self) -> Result<(), ChipmunkError> {
-        Ok(self
-            .log_file
+        self.log_file
             .sync_all()
-            .map_err(ChipmunkError::SegmentFsync)?)
+            .map_err(ChipmunkError::SegmentFsync)
     }
 
     // The current WAL id.
@@ -137,7 +136,7 @@ impl Wal {
 
     /// Append a [`WalEntry`] to the WAL file.
     pub fn append(&mut self, entry: WalEntry) -> Result<u64, ChipmunkError> {
-        Ok(self.append_batch(vec![entry])?)
+        self.append_batch(vec![entry])
     }
 
     /// Append a batch of [`WalEntry`] into the current log file.
