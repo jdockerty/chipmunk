@@ -127,7 +127,8 @@ impl Wal {
     fn append_batch(&mut self, entries: Vec<WalEntry>) -> u64 {
         // Invariant: the buffer should be empty here as it was previously
         // cleared after appending older entries. If the buffer is not empty
-        // then we can append duplicate data, which is not desired.
+        // then we can append duplicate data which may become unbounded in size
+        // as more and more data is added.
         assert_eq!(self.buffer.len(), 0);
 
         for e in entries {
