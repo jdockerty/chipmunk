@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use bloomfx::BloomFilter;
 use bytes::Bytes;
+use parking_lot::Mutex;
 
 use crate::{
     config::{MemtableConfig, WalConfig},
@@ -17,7 +18,7 @@ use crate::{
 pub struct Lsm {
     /// Write-ahead Log (WAL) which backs the operations performed on the LSM
     /// storage engine.
-    wal: std::sync::Mutex<Wal>,
+    wal: Mutex<Wal>,
     /// The configuration which was used to initialise the [`Wal`].
     wal_config: WalConfig,
 
@@ -28,12 +29,12 @@ pub struct Lsm {
 
     /// IDs of the now immutable memtables
     /// TODO: hold these in memory too, so that I/O is greatly reduced?
-    sstables: std::sync::Mutex<Vec<u64>>,
+    sstables: Mutex<Vec<u64>>,
 
-    bloom: std::sync::Mutex<BloomFilter<Vec<u8>>>,
+    bloom: Mutex<BloomFilter<Vec<u8>>>,
 
     l2_id: AtomicU64,
-    l2_files: std::sync::Mutex<Vec<u64>>,
+    l2_files: Mutex<Vec<u64>>,
 
     working_directory: PathBuf,
 }
@@ -69,7 +70,7 @@ impl Lsm {
         };
 
         {
-            self.wal.lock().unwrap().append(entry)?;
+            self.wal.lock().append(entry)?;
         }
 
         // Populate the internal bloom filter
@@ -82,7 +83,7 @@ impl Lsm {
         }
 
         // This compaction trigger is not very scientific at the moment.
-        if self.l2_files.lock().unwrap().len() > 3 {
+        if self.l2_files.lock().len() > 3 {
             self.force_compaction();
         }
 
@@ -94,14 +95,14 @@ impl Lsm {
     /// TODO: can we hold the various sealed tables in memory too for reduced I/O
     /// on get(k)?
     pub fn rotate_memtable(&self) {
-        self.sstables.lock().unwrap().push(self.memtable.id());
+        self.sstables.lock().push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());
     }
 
     /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
     /// has been flushed to an [`SSTable`].
     pub fn remove_closed_segments(&self) {
-        let mut wal = self.wal.lock().unwrap();
+        let mut wal = self.wal.lock();
         wal.closed_segments().iter().for_each(|segment_id| {
             let path = format!("{}/{segment_id}.wal", self.working_directory.display());
             eprintln!("Removing {path}");
@@ -120,7 +121,7 @@ impl Lsm {
         let mut insert_count = 0;
         let mut skip_count = 0;
         {
-            let mut sstables = self.sstables.lock().unwrap();
+            let mut sstables = self.sstables.lock();
             for l1_file_id in &*sstables {
                 let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
                 eprintln!("Compacting L1 file: {l1_file:?}");
@@ -153,7 +154,7 @@ impl Lsm {
         let flush_path = self.working_directory.join(format!("l2-{l2_id}"));
         let l2_data = bincode::serialize(&l2_tree).unwrap();
         std::fs::write(flush_path, l2_data).unwrap();
-        self.l2_files.lock().unwrap().push(l2_id);
+        self.l2_files.lock().push(l2_id);
     }
 
     /// Get a value from the LSM-tree.
@@ -170,7 +171,7 @@ impl Lsm {
             true => match self.memtable.get(&key) {
                 Some(v) => Some(v.to_vec()),
                 None => {
-                    for memtable_id in self.sstables.lock().unwrap().iter().rev() {
+                    for memtable_id in self.sstables.lock().iter().rev() {
                         let memtable = Memtable::load(
                             self.working_directory
                                 .join(format!("sstable-{memtable_id}")),
@@ -191,7 +192,6 @@ impl Lsm {
     pub fn delete(&self, key: Vec<u8>) -> Result<(), ChipmunkError> {
         self.wal
             .lock()
-            .unwrap()
             .append(WalEntry::Delete { key: key.clone() })?;
         self.memtable.delete(key);
 
@@ -213,7 +213,7 @@ impl Lsm {
     /// from scratch - partial restore is not supported.
     pub fn restore(&mut self) -> Result<(), ChipmunkError> {
         {
-            let mut wal = self.wal.lock().expect("Can acquire lock for WAL restore");
+            let mut wal = self.wal.lock();
             // Invariant: The restore operation implies that there is currently
             // nothing in any of the components. A partial restore is not supported
             // at the moment.
@@ -269,7 +269,7 @@ impl Lsm {
 
     /// Internal method for inserting into the [`BloomFilter`].
     fn bloom_insert(&self, key: Vec<u8>) {
-        self.bloom.lock().unwrap().insert(key);
+        self.bloom.lock().insert(key);
     }
 
     /// Quickly check whether a key is within the LSM-tree, utilising the internal
@@ -281,7 +281,7 @@ impl Lsm {
     fn check(&self, key: Vec<u8>) -> bool {
         // TODO: this could be a read lock (ideally nothing), but the underlying
         // filter takes a mutable reference when it should not.
-        self.bloom.lock().unwrap().check(key)
+        self.bloom.lock().check(key)
     }
 }
 
@@ -322,8 +322,8 @@ mod test {
         lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
         assert_eq!(lsm.memtable.id(), 0);
         assert_eq!(lsm.get(b"foo".to_vec()), Some(b"bar".to_vec()));
-        assert_ne!(lsm.wal.lock().unwrap().size(), 0);
-        let wal_size_after_put = lsm.wal.lock().unwrap().size();
+        assert_ne!(lsm.wal.lock().size(), 0);
+        let wal_size_after_put = lsm.wal.lock().size();
 
         lsm.rotate_memtable();
         assert_eq!(
@@ -339,7 +339,7 @@ mod test {
 
         lsm.delete(b"foo".to_vec()).unwrap();
         assert!(
-            lsm.wal.lock().unwrap().size() > wal_size_after_put,
+            lsm.wal.lock().size() > wal_size_after_put,
             "Deletion should append to the WAL"
         );
     }
@@ -390,7 +390,7 @@ mod test {
             "Memtable rotation should increment the ID"
         );
         assert_eq!(
-            lsm.sstables.lock().unwrap().len(),
+            lsm.sstables.lock().len(),
             0,
             "L1 SSTables on disk should be 0 after a full compaction cycle"
         );
@@ -433,7 +433,7 @@ mod test {
         }
 
         {
-            let mut lsm_wal = lsm.wal.lock().unwrap();
+            let mut lsm_wal = lsm.wal.lock();
             assert_eq!(lsm_wal.id(), 0);
             for _ in 1..=5 {
                 // Force rotations
@@ -455,7 +455,7 @@ mod test {
             assert!(!Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists());
         }
         assert_eq!(
-            lsm.wal.lock().unwrap().closed_segments().len(),
+            lsm.wal.lock().closed_segments().len(),
             0,
             "No closed segments remaining after removal",
         );
