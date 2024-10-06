@@ -33,7 +33,7 @@ pub struct Lsm {
     bloom: std::sync::Mutex<BloomFilter<Vec<u8>>>,
 
     l2_id: AtomicU64,
-    l2_files: Vec<u64>,
+    l2_files: std::sync::Mutex<Vec<u64>>,
 
     working_directory: PathBuf,
 }
@@ -50,7 +50,7 @@ impl Lsm {
             memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
             sstables: Vec::new().into(),
             l2_id: AtomicU64::new(0),
-            l2_files: Vec::new(),
+            l2_files: Vec::new().into(),
             working_directory: wal_config.log_directory.clone(),
             memtable_config,
             wal_config,
@@ -79,6 +79,11 @@ impl Lsm {
         if self.memtable.size() > self.memtable_config.max_size {
             eprintln!("Memtable rotation");
             self.rotate_memtable();
+        }
+
+        // This compaction trigger is not very scientific at the moment.
+        if self.l2_files.lock().unwrap().len() > 3 {
+            self.force_compaction();
         }
 
         Ok(())
@@ -110,7 +115,7 @@ impl Lsm {
     /// This operates as a full compaction. Taking all data from various sstables
     /// on disk and merging them into new files, removing any tombstones values
     /// to ensure only the most recent data is kept.
-    pub fn force_compaction(&mut self) {
+    pub fn force_compaction(&self) {
         let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
         let mut insert_count = 0;
         let mut skip_count = 0;
@@ -148,7 +153,7 @@ impl Lsm {
         let flush_path = self.working_directory.join(format!("l2-{l2_id}"));
         let l2_data = bincode::serialize(&l2_tree).unwrap();
         std::fs::write(flush_path, l2_data).unwrap();
-        self.l2_files.push(l2_id);
+        self.l2_files.lock().unwrap().push(l2_id);
     }
 
     /// Get a value from the LSM-tree.
@@ -342,7 +347,7 @@ mod test {
     #[test]
     fn compaction() {
         let dir = TempDir::new("compaction").unwrap();
-        let mut lsm = create_lsm(&dir, 1024, 1024);
+        let lsm = create_lsm(&dir, 1024, 1024);
 
         let dir_size = || {
             let entries = WalkDir::new(dir.path()).into_iter();
