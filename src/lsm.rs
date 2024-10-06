@@ -227,15 +227,20 @@ impl Lsm {
             wal.restore();
             println!("Restoring Memtable");
             for line in wal.lines() {
-                let line = line.unwrap();
-                let line: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
                 match line {
-                    WalEntry::Put { key, value } => {
-                        self.memtable.insert(key, value);
+                    Ok(line) => {
+                        let line: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
+                        match line {
+                            WalEntry::Put { key, value } => {
+                                self.memtable.insert(key, value);
+                            }
+                            WalEntry::Delete { key } => {
+                                self.memtable.delete(key);
+                            }
+                        }
                     }
-                    WalEntry::Delete { key } => {
-                        self.memtable.delete(key);
-                    }
+                    // Entries which are not valid UTF-8 will be skipped.
+                    Err(e) => eprintln!("Invalid entry in WAL: {e}"),
                 }
             }
         }
