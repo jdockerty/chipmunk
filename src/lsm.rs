@@ -11,6 +11,7 @@ use crate::{
     config::{MemtableConfig, WalConfig},
     memtable::Memtable,
     wal::{Wal, WalEntry},
+    ChipmunkError,
 };
 
 pub struct Lsm {
@@ -61,14 +62,14 @@ impl Lsm {
     ///
     /// A [`WalEntry`] is appended into the WAL before proceeding to insert the
     /// key-value pair into an in-memory index, the L0 [`Memtable`].
-    pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result<(), ChipmunkError> {
         let entry = WalEntry::Put {
             key: key.to_vec(),
             value: value.to_vec(),
         };
 
         {
-            self.wal.lock().unwrap().append(entry);
+            self.wal.lock().unwrap().append(entry)?;
         }
 
         // Populate the internal bloom filter
@@ -77,8 +78,10 @@ impl Lsm {
         self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
             eprintln!("Memtable rotation");
-            self.rotate_memtable()
+            self.rotate_memtable();
         }
+
+        Ok(())
     }
 
     /// Force a rotation of the current [`Memtable`].
@@ -180,12 +183,14 @@ impl Lsm {
         }
     }
 
-    pub fn delete(&self, key: Vec<u8>) {
+    pub fn delete(&self, key: Vec<u8>) -> Result<(), ChipmunkError> {
         self.wal
             .lock()
             .unwrap()
-            .append(WalEntry::Delete { key: key.clone() });
+            .append(WalEntry::Delete { key: key.clone() })?;
         self.memtable.delete(key);
+
+        Ok(())
     }
 
     pub fn memtable_id(&self) -> u64 {
@@ -201,9 +206,9 @@ impl Lsm {
     /// # Panics
     /// When a restore operation is conducted when the components are not started
     /// from scratch - partial restore is not supported.
-    pub fn restore(&mut self) {
+    pub fn restore(&mut self) -> Result<(), ChipmunkError> {
         {
-            let mut wal = self.wal.lock().unwrap();
+            let mut wal = self.wal.lock().expect("Can acquire lock for WAL restore");
             // Invariant: The restore operation implies that there is currently
             // nothing in any of the components. A partial restore is not supported
             // at the moment.
@@ -224,7 +229,7 @@ impl Lsm {
             );
 
             println!("Restoring WAL");
-            wal.restore();
+            wal.restore()?;
             println!("Restoring Memtable");
             for line in wal.lines() {
                 match line {
@@ -253,6 +258,8 @@ impl Lsm {
                 self.bloom_insert(k.to_vec());
             }
         }
+
+        Ok(())
     }
 
     /// Internal method for inserting into the [`BloomFilter`].
@@ -307,7 +314,7 @@ mod test {
         let dir = TempDir::new("crud").unwrap();
         let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
-        lsm.insert(b"foo".to_vec(), b"bar".to_vec());
+        lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
         assert_eq!(lsm.memtable.id(), 0);
         assert_eq!(lsm.get(b"foo".to_vec()), Some(b"bar".to_vec()));
         assert_ne!(lsm.wal.lock().unwrap().size(), 0);
@@ -325,7 +332,7 @@ mod test {
             "Value should be found in sstable on disk"
         );
 
-        lsm.delete(b"foo".to_vec());
+        lsm.delete(b"foo".to_vec()).unwrap();
         assert!(
             lsm.wal.lock().unwrap().size() > wal_size_after_put,
             "Deletion should append to the WAL"
@@ -356,11 +363,11 @@ mod test {
                 // iterations to force entries which should be discarded.
                 let key = format!("key{j}").as_bytes().to_vec();
                 let value = format!("value{i}-{j}").as_bytes().to_vec();
-                lsm.insert(key.clone(), value);
+                lsm.insert(key.clone(), value).unwrap();
 
                 // Delete every 10th key to accumulate tombstones
                 if j % 10 == 0 {
-                    lsm.delete(key);
+                    lsm.delete(key).unwrap();
                 }
 
                 current_size = dir_size();
@@ -389,7 +396,7 @@ mod test {
         let dir = TempDir::new("bloom").unwrap();
         let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
-        lsm.insert(b"foo".to_vec(), b"bar".to_vec());
+        lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
 
         assert!(lsm.check(b"foo".to_vec()));
         assert!(!lsm.check(b"baz".to_vec()));
@@ -397,7 +404,7 @@ mod test {
         drop(lsm);
 
         let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
-        lsm.restore();
+        lsm.restore().unwrap();
         assert!(
             lsm.check(b"foo".to_vec()),
             "The key 'foo' should exist in the filter after the structure was restored."
@@ -416,17 +423,20 @@ mod test {
             lsm.insert(
                 format!("foo{i}").into_bytes(),
                 format!("bar{i}").into_bytes(),
-            );
+            ).unwrap();
         }
 
-        assert_eq!(lsm.wal.lock().unwrap().id(), 0);
-        for _ in 1..=5 {
-            // Force rotations
-            lsm.wal.lock().unwrap().rotate();
-            lsm.rotate_memtable();
+        {
+            let mut lsm_wal = lsm.wal.lock().unwrap();
+            assert_eq!(lsm_wal.id(), 0);
+            for _ in 1..=5 {
+                // Force rotations
+                lsm_wal.rotate().unwrap();
+                lsm.rotate_memtable();
+            }
+            assert_eq!(lsm_wal.id(), 5);
+            assert_eq!(lsm_wal.closed_segments().len(), 5);
         }
-        assert_eq!(lsm.wal.lock().unwrap().id(), 5);
-        assert_eq!(lsm.wal.lock().unwrap().closed_segments().len(), 5);
 
         for i in 0..=5 {
             assert!(
