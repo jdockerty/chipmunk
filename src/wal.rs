@@ -82,21 +82,26 @@ impl Wal {
         }
     }
 
-    /// Restore the [`Wal`] through reading the files which are in the
+    /// Restore the [`Wal`] through reading the segment files which are in the
     /// provided directory.
     pub fn restore(&mut self) {
         let wal_files = std::fs::read_dir(&self.log_directory).expect("Can read set log_directory");
-        println!("{wal_files:?}");
         for w in wal_files {
             let w = w.expect("Valid file within log directory");
             let wal_file = File::open(w.path()).expect("File from given WAL should exist");
             let reader = BufReader::new(wal_file);
 
+            // The segments are bounded by the [`WAL_MAX_SEGMENT_SIZE_BYTES`]
+            // so this ensures the files themselves do not become huge for this
+            // operation.
+            let mut buf = Vec::new();
+
             for line in reader.lines() {
                 let line = line.unwrap();
                 let entry: WalEntry = bincode::deserialize(line.as_bytes()).unwrap();
-                self.append(entry);
+                buf.push(entry);
             }
+            self.append_batch(buf);
         }
     }
 
@@ -105,21 +110,31 @@ impl Wal {
     }
 
     /// Append a [`WalEntry`] to the WAL file.
-    ///
-    pub fn append(&mut self, entries: WalEntry) -> u64 {
-        self.append_batch(vec![entries])
+    pub fn append(&mut self, entry: WalEntry) -> u64 {
+        self.append_batch(vec![entry])
     }
 
     /// Append a batch of [`WalEntry`] into the current log file.
     fn append_batch(&mut self, entries: Vec<WalEntry>) -> u64 {
+        // Invariant: the buffer should be empty here as it was previously
+        // cleared after appending older entries. If the buffer is not empty
+        // then we can append duplicate data, which is not desired.
+        assert_eq!(self.buffer.len(), 0);
+
         for e in entries {
             // TODO: create append_entry func which is generic over Write trait
             bincode::serialize_into(&mut self.buffer, &e).unwrap();
             writeln!(&mut self.buffer).unwrap();
         }
         self.segment.log_file.write_all(&self.buffer).unwrap();
-        self.current_size = self.buffer.len() as u64;
-        self.buffer.len() as u64
+        let buffer_size = self.buffer.len() as u64;
+        self.current_size += buffer_size;
+
+        // The buffer has been written, we do not need to keep it around otherwise
+        // we risk misinforming the current segment size, as well as appending
+        // pre-existing data.
+        self.buffer.clear();
+        buffer_size
     }
 
     /// Get the current path of the active WAL segment file.
