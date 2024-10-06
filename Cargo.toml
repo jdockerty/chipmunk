@@ -11,6 +11,7 @@ bytes = { version = "1.6.1", features = ["serde"] }
 chrono = "0.4.38"
 dashmap = { version = "6.0.1", features = ["serde"] }
 serde = { version = "1.0.204", features = ["derive"] }
+thiserror = "1.0.64"
 tokio = { version = "1.39.3", features = ["full"] }
 
 [dev-dependencies]
