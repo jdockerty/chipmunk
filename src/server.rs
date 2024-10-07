@@ -104,7 +104,7 @@ mod test {
     async fn chipmunk_invalid_add() {
         let dir = TempDir::new("invalid_post").unwrap();
         let conf = ChipmunkConfig {
-            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf(), None),
             memtable: MemtableConfig::new(0, 1024),
         };
         let addr = setup_server(conf).await;
@@ -123,7 +123,7 @@ mod test {
     async fn chipmunk_crud() {
         let dir = TempDir::new("write_kv").unwrap();
         let conf = ChipmunkConfig {
-            wal: WalConfig::new(0, 1024, dir.path().to_path_buf()),
+            wal: WalConfig::new(0, 1024, dir.path().to_path_buf(), None),
             memtable: MemtableConfig::new(0, 1024),
         };
         let addr = setup_server(conf).await;

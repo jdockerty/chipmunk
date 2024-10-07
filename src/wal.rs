@@ -247,7 +247,7 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         let wrote = wal.append_batch(put_entries()).unwrap();
         assert_eq!(wal.current_size, wrote);
@@ -270,7 +270,7 @@ mod test {
                 value: b"bar".to_vec(),
             });
         }
-        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         let wrote = wal.append_batch(entries).unwrap();
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
@@ -289,7 +289,7 @@ mod test {
     #[test]
     fn wal_replay() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         let mut wrote = 0;
         for i in 0..10 {
@@ -318,7 +318,7 @@ mod test {
         // Drop the WAL and perform a restore
         drop(wal);
 
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         wal.restore().unwrap();
         assert_eq!(
             wal.current_size, wrote,
@@ -329,14 +329,14 @@ mod test {
     #[test]
     fn id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         assert_eq!(wal.segment.id(), 0);
     }
 
     #[test]
     fn wal_path() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         assert_eq!(
             wal.path(),
             temp_dir.into_path().join("0.wal"),
@@ -347,7 +347,7 @@ mod test {
     #[test]
     fn rotation() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         for _ in 0..3 {
             wal.append(WalEntry::Put {

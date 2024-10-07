@@ -46,6 +46,7 @@ impl Lsm {
                 wal_config.id,
                 &wal_config.log_directory,
                 wal_config.max_size,
+                wal_config.buffer_size,
             )
             .into(),
             memtable: Memtable::new(memtable_config.id, memtable_config.max_size),
@@ -306,6 +307,7 @@ mod test {
             id: 0,
             max_size: wal_max_size,
             log_directory: dir.path().to_path_buf(),
+            buffer_size: None,
         };
         let m = MemtableConfig {
             id: 0,
