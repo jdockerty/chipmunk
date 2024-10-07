@@ -12,6 +12,10 @@ use crate::ChipmunkError;
 
 pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 
+// Taken from the Rust [sys_common](https://doc.rust-lang.org/src/std/sys_common/io.rs.html#3)
+// crate for a sane default size.
+const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
+
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
 pub struct Wal {
@@ -79,8 +83,6 @@ pub enum WalEntry {
     Put { key: Vec<u8>, value: Vec<u8> },
     Delete { key: Vec<u8> },
 }
-
-const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
 
 impl Wal {
     pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
