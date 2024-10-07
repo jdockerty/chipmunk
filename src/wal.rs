@@ -80,13 +80,21 @@ pub enum WalEntry {
     Delete { key: Vec<u8> },
 }
 
+const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
+
 impl Wal {
-    pub fn new(id: u64, log_directory: &Path, max_size: u64) -> Self {
+    pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
+        let buf = if let Some(size) = buffer_size {
+            Vec::with_capacity(size)
+        } else {
+            Vec::with_capacity(DEFAULT_BUFFER_SIZE)
+        };
+
         Self {
             log_directory: log_directory.to_path_buf(),
             current_size: 0,
             max_size,
-            buffer: Vec::new(),
+            buffer: buf,
             segment: Segment::try_new(id, log_directory).unwrap(),
             closed_segments: Vec::new(),
         }
