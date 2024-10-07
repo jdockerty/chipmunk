@@ -11,6 +11,7 @@ async fn main() {
             id: 0,
             max_size: 1024,
             log_directory: "./".into(),
+            buffer_size: None,
         },
         memtable: MemtableConfig {
             id: 0,

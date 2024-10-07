@@ -12,6 +12,10 @@ use crate::ChipmunkError;
 
 pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 
+// Taken from the Rust [sys_common](https://doc.rust-lang.org/src/std/sys_common/io.rs.html#3)
+// crate for a sane default size.
+const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
+
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
 pub struct Wal {
@@ -30,63 +34,19 @@ pub struct Wal {
     segment: Segment,
 }
 
-struct Segment {
-    /// ID of the segment.
-    id: AtomicU64,
-    log_file: File,
-}
-
-impl Segment {
-    /// Create a new [`Segment`].
-    ///
-    /// # Panics
-    ///
-    /// When the underlying file for the segment cannot be created with write
-    /// permissions.
-    pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
-        let id = AtomicU64::new(id);
-        let log_file_path = format!(
-            "{}/{}.wal",
-            path.display(),
-            id.load(std::sync::atomic::Ordering::Acquire)
-        );
-        let new_segment = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_file_path)
-            .map_err(ChipmunkError::SegmentOpen)?;
-
-        Ok(Self {
-            id,
-            log_file: new_segment,
-        })
-    }
-
-    pub fn flush(&mut self) -> Result<(), ChipmunkError> {
-        self.log_file
-            .sync_all()
-            .map_err(ChipmunkError::SegmentFsync)
-    }
-
-    // The current WAL id.
-    pub fn id(&self) -> u64 {
-        self.id.load(Ordering::Acquire)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum WalEntry {
-    Put { key: Vec<u8>, value: Vec<u8> },
-    Delete { key: Vec<u8> },
-}
-
 impl Wal {
-    pub fn new(id: u64, log_directory: &Path, max_size: u64) -> Self {
+    pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
+        let buf = if let Some(size) = buffer_size {
+            Vec::with_capacity(size)
+        } else {
+            Vec::with_capacity(DEFAULT_BUFFER_SIZE)
+        };
+
         Self {
             log_directory: log_directory.to_path_buf(),
             current_size: 0,
             max_size,
-            buffer: Vec::new(),
+            buffer: buf,
             segment: Segment::try_new(id, log_directory).unwrap(),
             closed_segments: Vec::new(),
         }
@@ -213,6 +173,56 @@ impl Wal {
     }
 }
 
+struct Segment {
+    /// ID of the segment.
+    id: AtomicU64,
+    log_file: File,
+}
+
+impl Segment {
+    /// Create a new [`Segment`].
+    ///
+    /// # Panics
+    ///
+    /// When the underlying file for the segment cannot be created with write
+    /// permissions.
+    pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
+        let id = AtomicU64::new(id);
+        let log_file_path = format!(
+            "{}/{}.wal",
+            path.display(),
+            id.load(std::sync::atomic::Ordering::Acquire)
+        );
+        let new_segment = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path)
+            .map_err(ChipmunkError::SegmentOpen)?;
+
+        Ok(Self {
+            id,
+            log_file: new_segment,
+        })
+    }
+
+    pub fn flush(&mut self) -> Result<(), ChipmunkError> {
+        self.log_file
+            .sync_all()
+            .map_err(ChipmunkError::SegmentFsync)
+    }
+
+    // The current WAL id.
+    pub fn id(&self) -> u64 {
+        self.id.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum WalEntry {
+    Put { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{BufRead, BufReader};
@@ -239,7 +249,7 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         let wrote = wal.append_batch(put_entries()).unwrap();
         assert_eq!(wal.current_size, wrote);
@@ -262,7 +272,7 @@ mod test {
                 value: b"bar".to_vec(),
             });
         }
-        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         let wrote = wal.append_batch(entries).unwrap();
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
@@ -281,7 +291,7 @@ mod test {
     #[test]
     fn wal_replay() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         let mut wrote = 0;
         for i in 0..10 {
@@ -310,7 +320,7 @@ mod test {
         // Drop the WAL and perform a restore
         drop(wal);
 
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         wal.restore().unwrap();
         assert_eq!(
             wal.current_size, wrote,
@@ -321,14 +331,14 @@ mod test {
     #[test]
     fn id() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         assert_eq!(wal.segment.id(), 0);
     }
 
     #[test]
     fn wal_path() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         assert_eq!(
             wal.path(),
             temp_dir.into_path().join("0.wal"),
@@ -339,7 +349,7 @@ mod test {
     #[test]
     fn rotation() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES);
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         for _ in 0..3 {
             wal.append(WalEntry::Put {
