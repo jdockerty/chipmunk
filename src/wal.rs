@@ -34,56 +34,6 @@ pub struct Wal {
     segment: Segment,
 }
 
-struct Segment {
-    /// ID of the segment.
-    id: AtomicU64,
-    log_file: File,
-}
-
-impl Segment {
-    /// Create a new [`Segment`].
-    ///
-    /// # Panics
-    ///
-    /// When the underlying file for the segment cannot be created with write
-    /// permissions.
-    pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
-        let id = AtomicU64::new(id);
-        let log_file_path = format!(
-            "{}/{}.wal",
-            path.display(),
-            id.load(std::sync::atomic::Ordering::Acquire)
-        );
-        let new_segment = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_file_path)
-            .map_err(ChipmunkError::SegmentOpen)?;
-
-        Ok(Self {
-            id,
-            log_file: new_segment,
-        })
-    }
-
-    pub fn flush(&mut self) -> Result<(), ChipmunkError> {
-        self.log_file
-            .sync_all()
-            .map_err(ChipmunkError::SegmentFsync)
-    }
-
-    // The current WAL id.
-    pub fn id(&self) -> u64 {
-        self.id.load(Ordering::Acquire)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum WalEntry {
-    Put { key: Vec<u8>, value: Vec<u8> },
-    Delete { key: Vec<u8> },
-}
-
 impl Wal {
     pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
         let buf = if let Some(size) = buffer_size {
@@ -221,6 +171,56 @@ impl Wal {
     pub fn clear_segments(&mut self) {
         self.closed_segments.clear();
     }
+}
+
+struct Segment {
+    /// ID of the segment.
+    id: AtomicU64,
+    log_file: File,
+}
+
+impl Segment {
+    /// Create a new [`Segment`].
+    ///
+    /// # Panics
+    ///
+    /// When the underlying file for the segment cannot be created with write
+    /// permissions.
+    pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
+        let id = AtomicU64::new(id);
+        let log_file_path = format!(
+            "{}/{}.wal",
+            path.display(),
+            id.load(std::sync::atomic::Ordering::Acquire)
+        );
+        let new_segment = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path)
+            .map_err(ChipmunkError::SegmentOpen)?;
+
+        Ok(Self {
+            id,
+            log_file: new_segment,
+        })
+    }
+
+    pub fn flush(&mut self) -> Result<(), ChipmunkError> {
+        self.log_file
+            .sync_all()
+            .map_err(ChipmunkError::SegmentFsync)
+    }
+
+    // The current WAL id.
+    pub fn id(&self) -> u64 {
+        self.id.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum WalEntry {
+    Put { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
 }
 
 #[cfg(test)]
