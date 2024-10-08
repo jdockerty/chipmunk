@@ -205,6 +205,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dashmap",
+ "fxhash",
  "parking_lot",
  "reqwest",
  "serde",

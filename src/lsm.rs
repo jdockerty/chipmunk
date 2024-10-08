@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
 use bloomfx::BloomFilter;
 use bytes::Bytes;
+use fxhash::FxHashMap;
 use parking_lot::Mutex;
 
 use crate::{
@@ -118,7 +118,7 @@ impl Lsm {
     /// on disk and merging them into new files, removing any tombstones values
     /// to ensure only the most recent data is kept.
     pub fn force_compaction(&self) {
-        let mut l2_tree: BTreeMap<Bytes, Bytes> = BTreeMap::new();
+        let mut l2_tree: FxHashMap<Bytes, Bytes> = FxHashMap::default();
         let mut insert_count = 0;
         let mut skip_count = 0;
         {
@@ -126,7 +126,7 @@ impl Lsm {
             for l1_file_id in &*sstables {
                 let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
                 eprintln!("Compacting L1 file: {l1_file:?}");
-                let tree: BTreeMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
+                let tree: FxHashMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
 
                 for (k, v) in tree {
                     if let Some(v) = v {
