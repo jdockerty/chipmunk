@@ -47,7 +47,8 @@ async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => {
                 eprintln!("Cannot insert '{key}': {e}");
-                StatusCode::BAD_REQUEST.into_response()
+                let err = format!("Cannot insert '{key}'");
+                (StatusCode::BAD_REQUEST, err).into_response()
             }
         },
         None => (StatusCode::BAD_REQUEST, "Must provide key=value format").into_response(),
