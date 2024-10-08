@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info};
 
 use crate::ChipmunkError;
 
@@ -55,15 +56,26 @@ impl Wal {
     /// Restore the [`Wal`] through reading the segment files which are in the
     /// provided directory.
     pub fn restore(&mut self) -> Result<(), ChipmunkError> {
+        info!("Restoring WAL");
         let segment_files = std::fs::read_dir(&self.log_directory).map_err(|e| {
             ChipmunkError::WalDirectoryOpen {
                 source: e,
                 path: self.log_directory.clone(),
             }
         })?;
-        for s in segment_files {
+        let num_files = segment_files.size_hint().1.expect("Upper bound exists");
+        debug!(num_files, "Segment files");
+        for (i, s) in segment_files.into_iter().enumerate() {
             let segment = s.expect("Valid file within log directory");
             let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
+            let mut bytes_read = 0;
+            let max_bytes = segment_file.metadata().expect("Can read metadata").len();
+            info!(
+                segment_size = max_bytes,
+                current_segment_number = i,
+                number_of_segments = num_files,
+                "Restoring segment"
+            );
             let reader = BufReader::new(segment_file);
 
             // The segments are bounded by the [`WAL_MAX_SEGMENT_SIZE_BYTES`]
@@ -74,12 +86,14 @@ impl Wal {
             for line in reader.lines() {
                 let line = line.expect("WAL contains valid utf8");
 
+                bytes_read += line.as_bytes().len();
                 match bincode::deserialize(line.as_bytes()) {
                     Ok(entry) => buf.push(entry),
                     // Invalid entries are skipped and not restored
                     Err(e) => eprintln!("Invalid entry in segment: {e}"),
                 }
             }
+            info!(bytes_read, current_segment = i, "Completed segment");
             self.append_batch(buf)?;
         }
 
@@ -140,7 +154,7 @@ impl Wal {
     ///
     /// This flushes all operations to the current file before creating a new file.
     pub fn rotate(&mut self) -> Result<(), ChipmunkError> {
-        eprintln!("WAL rotation");
+        info!("Rotating WAL");
         self.segment.flush()?;
 
         let current_id = self.segment.id();

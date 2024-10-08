@@ -7,6 +7,7 @@ use bloomfx::BloomFilter;
 use bytes::Bytes;
 use fxhash::FxHashMap;
 use parking_lot::Mutex;
+use tracing::debug;
 
 use crate::{
     config::{MemtableConfig, WalConfig},
@@ -165,6 +166,7 @@ impl Lsm {
     /// Afterwards [`Memtable`] is then consulted to search through persisted SSTables
     /// if it exists.
     pub fn get(&self, key: Vec<u8>) -> Option<Vec<u8>> {
+        debug!(key=?String::from_utf8_lossy(&key), "Getting key");
         match self.check(key.clone()) {
             // We can return instantly if the value has not passed through the
             // filter.
@@ -172,6 +174,7 @@ impl Lsm {
             true => match self.memtable.get(&key) {
                 Some(v) => Some(v.to_vec()),
                 None => {
+                    debug!("Searching immutable memtables");
                     for memtable_id in self.sstables.lock().iter().rev() {
                         let memtable = Memtable::load(
                             self.working_directory
@@ -191,6 +194,7 @@ impl Lsm {
     }
 
     pub fn delete(&self, key: Vec<u8>) -> Result<(), ChipmunkError> {
+        debug!(key=?String::from_utf8_lossy(&key), "Deleting key");
         self.wal
             .lock()
             .append(WalEntry::Delete { key: key.clone() })?;
