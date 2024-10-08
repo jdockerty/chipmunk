@@ -10,7 +10,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use fxhash::FxHashMap;
 
-pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
+pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1024 * 1024; // 1 MiB
 
 #[derive(Debug)]
 pub struct Memtable {
