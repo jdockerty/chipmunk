@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::ChipmunkError;
 
@@ -90,7 +90,7 @@ impl Wal {
                 match bincode::deserialize(line.as_bytes()) {
                     Ok(entry) => buf.push(entry),
                     // Invalid entries are skipped and not restored
-                    Err(e) => eprintln!("Invalid entry in segment: {e}"),
+                    Err(e) => error!(error=%e, "Invalid entry in segment"),
                 }
             }
             info!(bytes_read, current_segment = i, "Completed segment");

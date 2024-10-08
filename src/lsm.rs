@@ -7,7 +7,7 @@ use bloomfx::BloomFilter;
 use bytes::Bytes;
 use fxhash::FxHashMap;
 use parking_lot::Mutex;
-use tracing::debug;
+use tracing::{debug, error, info};
 
 use crate::{
     config::{MemtableConfig, WalConfig},
@@ -80,7 +80,7 @@ impl Lsm {
 
         self.memtable.insert(key, value);
         if self.memtable.size() > self.memtable_config.max_size {
-            eprintln!("Memtable rotation");
+            info!("Memtable rotation");
             self.rotate_memtable();
         }
 
@@ -107,7 +107,7 @@ impl Lsm {
         let mut wal = self.wal.lock();
         wal.closed_segments().iter().for_each(|segment_id| {
             let path = format!("{}/{segment_id}.wal", self.working_directory.display());
-            eprintln!("Removing {path}");
+            debug!(path, "Removing segment");
             std::fs::remove_file(&path).unwrap()
         });
         wal.clear_segments();
@@ -124,31 +124,30 @@ impl Lsm {
         let mut skip_count = 0;
         {
             let mut sstables = self.sstables.lock();
+            info!(sstable_count = sstables.len(), "Running compaction cycle");
             for l1_file_id in &*sstables {
                 let l1_file = self.working_directory.join(format!("sstable-{l1_file_id}"));
-                eprintln!("Compacting L1 file: {l1_file:?}");
+                info!(file = %l1_file.display(), "Compacting L1 file");
                 let tree: FxHashMap<Bytes, Option<Bytes>> = Memtable::load(l1_file.clone());
 
                 for (k, v) in tree {
                     if let Some(v) = v {
                         insert_count += 1;
-                        eprintln!(
-                            "[Compaction] Inserting {} for L2",
-                            String::from_utf8_lossy(&k)
-                        );
+                        debug!(key = %String::from_utf8_lossy(&k), "Inserting for L2");
                         // Only insert values which are NOT tombstones
                         l2_tree.insert(k, v);
                     } else {
                         skip_count += 1;
                     }
                 }
+                info!(file = %l1_file.display(), "Deleting L1 file");
                 std::fs::remove_file(l1_file)
                     .expect("Can always remove existing SSTable after compaction");
+                info!(insert_count, skip_count, "Compaction progress");
             }
             sstables.clear();
         }
-        eprintln!("[Compaction] Insertion count: {insert_count}");
-        eprintln!("[Compaction] Skip count: {skip_count}");
+        info!(insert_count, skip_count, "Compaction complete");
 
         let l2_id = self
             .l2_id
@@ -238,9 +237,8 @@ impl Lsm {
                 "Memtable can only be restored from scratch"
             );
 
-            println!("Restoring WAL");
             wal.restore()?;
-            println!("Restoring Memtable");
+            info!("Restoring Memtable");
             for line in wal.lines()? {
                 match line {
                     Ok(line) => {
@@ -255,12 +253,12 @@ impl Lsm {
                         }
                     }
                     // Entries which are not valid UTF-8 will be skipped.
-                    Err(e) => eprintln!("Invalid entry in WAL: {e}"),
+                    Err(e) => error!(error=%e, "Skipping invalid WAL entry"),
                 }
             }
         }
 
-        println!("Restoring bloom filter");
+        info!("Restoring bloom filter");
         for (k, v) in &self.memtable {
             if v.is_none() {
                 continue;
