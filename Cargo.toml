@@ -10,6 +10,7 @@ bloomfx = "0.1.0"
 bytes = { version = "1.6.1", features = ["serde"] }
 chrono = "0.4.38"
 dashmap = { version = "6.0.1", features = ["serde"] }
+fxhash = "0.2.1"
 parking_lot = "0.12.3"
 serde = { version = "1.0.204", features = ["derive"] }
 thiserror = "1.0.64"

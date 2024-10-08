@@ -2,13 +2,13 @@
 #![allow(dead_code)]
 
 use std::{
-    collections::BTreeMap,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use fxhash::FxHashMap;
 
 pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1048576; // 1 MiB
 
@@ -101,7 +101,7 @@ impl Memtable {
     }
 
     /// Load a [`Memtable`]'s contained data by providing its path.
-    pub fn load(path: PathBuf) -> BTreeMap<Bytes, Option<Bytes>> {
+    pub fn load(path: PathBuf) -> FxHashMap<Bytes, Option<Bytes>> {
         eprintln!("Loading from {path:?}");
         let data = std::fs::read(&path).unwrap();
         bincode::deserialize(&data).unwrap()
