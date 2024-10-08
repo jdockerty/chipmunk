@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::ChipmunkError;
 
@@ -63,8 +63,7 @@ impl Wal {
                 path: self.log_directory.clone(),
             }
         })?;
-        let num_files = segment_files.size_hint().1.expect("Upper bound exists");
-        debug!(num_files, "Segment files");
+
         for (i, s) in segment_files.into_iter().enumerate() {
             let segment = s.expect("Valid file within log directory");
             let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
@@ -73,7 +72,6 @@ impl Wal {
             info!(
                 segment_size = max_bytes,
                 current_segment_number = i,
-                number_of_segments = num_files,
                 "Restoring segment"
             );
             let reader = BufReader::new(segment_file);
