@@ -12,20 +12,23 @@ mod wal;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChipmunkError {
-    #[error("An invalid segment file")]
+    #[error("an invalid segment file")]
     InvalidSegment { name: String, source: io::Error },
 
-    #[error("Unable to fsync the current segment")]
+    #[error("unable to fsync the current segment")]
     SegmentFsync(io::Error),
 
-    #[error("Unable to open wal file")]
+    #[error("unable to open wal file")]
     SegmentOpen(io::Error),
 
-    #[error("Could not append to the WAL segment")]
+    #[error("could not append to the WAL segment")]
     WalAppend(io::Error),
 
-    #[error("Unable to open WAL directory '{path}': {source} ")]
+    #[error("unable to open WAL directory '{path}': {source} ")]
     WalDirectoryOpen { source: io::Error, path: PathBuf },
+
+    #[error("unable to open directory to restore: {0}")]
+    WalRestoreDirectory(io::Error),
 }
 
 impl ChipmunkError {
