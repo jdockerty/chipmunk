@@ -4,10 +4,12 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::Arc;
-use tracing::warn;
+use tokio::sync::RwLock;
+use tracing::{debug, warn};
 
 use crate::config::ChipmunkConfig;
 use crate::lsm::Lsm;
+use crate::ChipmunkError;
 
 pub fn new_app(store: Chipmunk) -> Router {
     let store = Arc::new(store);
@@ -23,7 +25,7 @@ async fn get_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-    match state.store().get(key.into_bytes()) {
+    match state.store.read().await.get(key.into_bytes()) {
         Some(value) => (value).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -33,7 +35,7 @@ async fn delete_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-    match state.store().delete(key.as_bytes().to_vec()) {
+    match state.store.write().await.delete(key.as_bytes().to_vec()) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(e) => {
             warn!("Cannot delete '{key}': {e}");
@@ -44,7 +46,7 @@ async fn delete_key_handler(
 
 async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl IntoResponse {
     match req.split_once("=") {
-        Some((key, value)) => match state.store().insert(key.into(), value.into()) {
+        Some((key, value)) => match state.store.write().await.insert(key.into(), value.into()) {
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => {
                 warn!("Cannot insert '{key}': {e}");
@@ -56,23 +58,60 @@ async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl
     }
 }
 
-/// An instance of the chipmunk store.
+/// An instance of the [`Chipmunk`] store.
 ///
 /// This comprises of the underlying k-v store and server. This utilises the
 /// actor pattern for communication. This is the task portion.
+#[derive(Clone)]
 pub struct Chipmunk {
-    store: Arc<Lsm>,
+    store: Arc<RwLock<Lsm>>,
 }
 
 impl Chipmunk {
     pub fn new(config: ChipmunkConfig) -> Self {
         Self {
-            store: Arc::new(Lsm::new(config.wal, config.memtable)),
+            store: Arc::new(RwLock::new(Lsm::new(config.wal, config.memtable))),
         }
     }
 
-    pub fn store(&self) -> &Lsm {
-        &self.store
+    /// Attempt to perform a restore of the store.
+    pub async fn restore(&self) -> Result<(), ChipmunkError> {
+        if self.should_restore().await? {
+            self.store.write().await.restore()?;
+        }
+        Ok(())
+    }
+
+    /// Determine whether a restore is possible.
+    ///
+    /// # Notes
+    /// This is a simple check as to whether there are any other files present
+    /// within the log directory when the server is started.
+    async fn should_restore(&self) -> Result<bool, ChipmunkError> {
+        // TODO: this method of checking for restore will do 2 instances of
+        // a `read_dir`, we should be able to avoid this.
+        let files = std::fs::read_dir(self.store.read().await.working_directory())
+            .map_err(ChipmunkError::WalRestoreDirectory)?;
+        let files = files
+            .filter(|d| d.is_ok())
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let name = entry.file_name();
+                if name.to_string_lossy().contains("wal") && entry.metadata().unwrap().len() > 0 {
+                    Some(entry)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if files.is_empty() {
+            debug!("Restore will not be attempted");
+            Ok(false)
+        } else {
+            debug!(num_files = files.len(), "Restore will be attempted");
+            Ok(true)
+        }
     }
 }
 
