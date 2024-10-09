@@ -1,6 +1,8 @@
 use std::io;
 use std::path::PathBuf;
 
+use axum::http::StatusCode;
+
 pub mod config;
 pub mod server;
 
@@ -24,4 +26,18 @@ pub enum ChipmunkError {
 
     #[error("Unable to open WAL directory '{path}': {source} ")]
     WalDirectoryOpen { source: io::Error, path: PathBuf },
+}
+
+impl ChipmunkError {
+    fn as_status_code(&self) -> StatusCode {
+        // NOTE: new errors may not always be surfaced as an internal server
+        // error so we can allow this for now.
+        #[allow(clippy::match_single_binding)]
+        match self {
+            // The internal error should be masked. We do not want to leak
+            // errors relating to underlying k-v operations over the outward
+            // facing HTTP API.
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
 }
