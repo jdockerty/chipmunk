@@ -4,10 +4,12 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::config::ChipmunkConfig;
 use crate::lsm::Lsm;
+use crate::ChipmunkError;
 
 pub fn new_app(store: Chipmunk) -> Router {
     let store = Arc::new(store);
@@ -23,7 +25,7 @@ async fn get_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-    match state.store().get(key.into_bytes()) {
+    match state.store.read().await.get(key.into_bytes()) {
         Some(value) => (value).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -33,7 +35,7 @@ async fn delete_key_handler(
     Path(key): Path<String>,
     State(state): State<Arc<Chipmunk>>,
 ) -> impl IntoResponse {
-    match state.store().delete(key.as_bytes().to_vec()) {
+    match state.store.write().await.delete(key.as_bytes().to_vec()) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(e) => {
             warn!("Cannot delete '{key}': {e}");
@@ -44,7 +46,7 @@ async fn delete_key_handler(
 
 async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl IntoResponse {
     match req.split_once("=") {
-        Some((key, value)) => match state.store().insert(key.into(), value.into()) {
+        Some((key, value)) => match state.store.write().await.insert(key.into(), value.into()) {
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => {
                 warn!("Cannot insert '{key}': {e}");
