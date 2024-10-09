@@ -92,22 +92,24 @@ impl Chipmunk {
         // a `read_dir`, we should be able to avoid this.
         let files = std::fs::read_dir(self.store.read().await.working_directory())
             .map_err(ChipmunkError::WalRestoreDirectory)?;
-        let files = files.filter(|d| d.is_ok()).map(|entry| {
-            let entry = entry.unwrap();
-            let name = entry.file_name();
-            if name.to_string_lossy().contains("wal") && entry.metadata().unwrap().len() > 0 {
-                Some(entry)
-            } else {
-                None
-            }
-        }).collect::<Vec<_>>();
+        let files = files
+            .filter(|d| d.is_ok())
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let name = entry.file_name();
+                if name.to_string_lossy().contains("wal") && entry.metadata().unwrap().len() > 0 {
+                    Some(entry)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
 
         if files.is_empty() {
             debug!("Restore will not be attempted");
             Ok(false)
         } else {
-
-            debug!(num_files=files.len(), "Restore will be attempted");
+            debug!(num_files = files.len(), "Restore will be attempted");
             Ok(true)
         }
     }
