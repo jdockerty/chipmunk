@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::Arc;
+use tracing::warn;
 
 use crate::config::ChipmunkConfig;
 use crate::lsm::Lsm;
@@ -35,7 +36,7 @@ async fn delete_key_handler(
     match state.store().delete(key.as_bytes().to_vec()) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(e) => {
-            eprintln!("Cannot delete '{key}': {e}");
+            warn!("Cannot delete '{key}': {e}");
             StatusCode::BAD_REQUEST
         }
     }
@@ -46,7 +47,7 @@ async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl
         Some((key, value)) => match state.store().insert(key.into(), value.into()) {
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => {
-                eprintln!("Cannot insert '{key}': {e}");
+                warn!("Cannot insert '{key}': {e}");
                 let err = format!("Cannot insert '{key}'");
                 (StatusCode::BAD_REQUEST, err).into_response()
             }

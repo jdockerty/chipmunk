@@ -9,6 +9,7 @@ use std::{
 use bytes::Bytes;
 use dashmap::DashMap;
 use fxhash::FxHashMap;
+use tracing::debug;
 
 pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 1024 * 1024; // 1 MiB
 
@@ -36,10 +37,10 @@ impl Memtable {
 
     /// Put a key-value pair into the [`Memtable`].
     pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) {
-        eprintln!(
-            "Inserting {}={}",
-            String::from_utf8_lossy(&key),
-            String::from_utf8_lossy(&value)
+        debug!(
+            key = %String::from_utf8_lossy(&key),
+            value = %String::from_utf8_lossy(&value),
+            "Memtable insertion",
         );
         let key = Bytes::from(key);
         let value = Bytes::from(value);
@@ -59,7 +60,7 @@ impl Memtable {
 
     /// Delete a key-value pair from the [`Memtable`].
     pub fn delete(&self, key: Vec<u8>) {
-        eprintln!("Deleting {}", String::from_utf8_lossy(&key));
+        debug!(key=%String::from_utf8_lossy(&key), "Memtable deletion");
         self.tree.insert(key.into(), None);
     }
 
@@ -76,7 +77,7 @@ impl Memtable {
             flush_dir.display(),
             self.id.load(Ordering::Acquire)
         );
-        eprintln!("Flushing to {flush_path:?}");
+        debug!(path = flush_path, "Flushing memtable");
 
         std::fs::write(flush_path, data).unwrap();
         self.tree.clear();
@@ -102,7 +103,7 @@ impl Memtable {
 
     /// Load a [`Memtable`]'s contained data by providing its path.
     pub fn load(path: PathBuf) -> FxHashMap<Bytes, Option<Bytes>> {
-        eprintln!("Loading from {path:?}");
+        debug!(path = %path.display(), "Loading memtable");
         let data = std::fs::read(&path).unwrap();
         bincode::deserialize(&data).unwrap()
     }
