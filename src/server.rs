@@ -37,7 +37,7 @@ async fn delete_key_handler(
         Ok(_) => StatusCode::NO_CONTENT,
         Err(e) => {
             warn!("Cannot delete '{key}': {e}");
-            StatusCode::BAD_REQUEST
+            e.as_status_code()
         }
     }
 }
@@ -49,7 +49,7 @@ async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl
             Err(e) => {
                 warn!("Cannot insert '{key}': {e}");
                 let err = format!("Cannot insert '{key}'");
-                (StatusCode::BAD_REQUEST, err).into_response()
+                (e.as_status_code(), err).into_response()
             }
         },
         None => (StatusCode::BAD_REQUEST, "Must provide key=value format").into_response(),
