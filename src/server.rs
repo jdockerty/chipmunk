@@ -58,23 +58,47 @@ async fn add_kv_handler(State(state): State<Arc<Chipmunk>>, req: String) -> impl
     }
 }
 
-/// An instance of the chipmunk store.
+/// An instance of the [`Chipmunk`] store.
 ///
 /// This comprises of the underlying k-v store and server. This utilises the
 /// actor pattern for communication. This is the task portion.
+#[derive(Clone)]
 pub struct Chipmunk {
-    store: Arc<Lsm>,
+    store: Arc<RwLock<Lsm>>,
 }
 
 impl Chipmunk {
     pub fn new(config: ChipmunkConfig) -> Self {
         Self {
-            store: Arc::new(Lsm::new(config.wal, config.memtable)),
+            store: Arc::new(RwLock::new(Lsm::new(config.wal, config.memtable))),
         }
     }
 
-    pub fn store(&self) -> &Lsm {
-        &self.store
+    /// Attempt to perform a restore of the store.
+    pub async fn restore(&self) -> Result<(), ChipmunkError> {
+        if self.should_restore().await? {
+            self.store.write().await.restore()?;
+        }
+        Ok(())
+    }
+
+    /// Determine whether a restore is possible.
+    ///
+    /// # Notes
+    /// This is a simple check as to whether there are any other files present
+    /// within the log directory when the server is started.
+    async fn should_restore(&self) -> Result<bool, ChipmunkError> {
+        // TODO: this method of checking for restore will do 2 instances of
+        // a `read_dir`, we should be able to avoid this.
+        let files = std::fs::read_dir(self.store.read().await.working_directory())
+            .map_err(ChipmunkError::WalRestoreDirectory)?;
+        let v = files.filter(|d| d.is_ok()).collect::<Vec<_>>();
+
+        if v.is_empty() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
