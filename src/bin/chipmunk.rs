@@ -8,7 +8,7 @@ use tracing::info;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::level_filters::LevelFilter::DEBUG)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
     let config = ChipmunkConfig {
@@ -25,6 +25,7 @@ async fn main() {
     };
 
     let c = Chipmunk::new(config);
+    c.restore().await.unwrap();
     info!("Listening on http://127.0.0.1:5000");
     let app = chipmunk::server::new_app(c);
     let listener = TcpListener::bind("127.0.0.1:5000").await.unwrap();

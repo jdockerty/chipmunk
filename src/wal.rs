@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::ChipmunkError;
 
@@ -64,12 +64,30 @@ impl Wal {
             }
         })?;
 
+        let mut segment_count = 0;
         for (i, s) in segment_files.into_iter().enumerate() {
+            segment_count += 1;
             let segment = s.expect("Valid file within log directory");
+            if !segment.file_type().unwrap().is_file() {
+                debug!(name=?segment.file_name(), "Skipping directory during restore");
+                continue;
+            }
+
+            if !segment.file_name().to_string_lossy().contains("wal") {
+                info!(name=?segment.file_name(), "Skipping non-WAL file during restore");
+                continue;
+            }
+
+            if segment.metadata().unwrap().len() == 0 {
+                info!(name=?segment.file_name(), "Skipping empty WAL");
+                continue;
+            }
+
             let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
             let mut bytes_read = 0;
             let max_bytes = segment_file.metadata().expect("Can read metadata").len();
             info!(
+                name = ?segment.file_name(),
                 segment_size = max_bytes,
                 current_segment_number = i,
                 "Restoring segment"
@@ -94,6 +112,7 @@ impl Wal {
             info!(bytes_read, current_segment = i, "Completed segment");
             self.append_batch(buf)?;
         }
+        info!(segment_count, "Restore segments");
 
         Ok(())
     }

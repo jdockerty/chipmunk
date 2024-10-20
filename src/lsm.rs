@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 use bloomfx::BloomFilter;
@@ -285,6 +285,11 @@ impl Lsm {
         // TODO: this could be a read lock (ideally nothing), but the underlying
         // filter takes a mutable reference when it should not.
         self.bloom.lock().check(key)
+    }
+
+    /// Get the configured working directory.
+    pub fn working_directory(&self) -> &Path {
+        &self.working_directory
     }
 }
 
