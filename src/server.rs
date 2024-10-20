@@ -5,7 +5,7 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::config::ChipmunkConfig;
 use crate::lsm::Lsm;
@@ -75,43 +75,12 @@ impl Chipmunk {
     }
 
     /// Attempt to perform a restore of the store.
-    pub async fn restore(&self) -> Result<(), ChipmunkError> {
-        if self.should_restore().await? {
-            self.store.write().await.restore()?;
-        }
-        Ok(())
-    }
-
-    /// Determine whether a restore is possible.
     ///
-    /// # Notes
-    /// This is a simple check as to whether there are any other files present
-    /// within the log directory when the server is started.
-    async fn should_restore(&self) -> Result<bool, ChipmunkError> {
-        // TODO: this method of checking for restore will do 2 instances of
-        // a `read_dir`, we should be able to avoid this.
-        let files = std::fs::read_dir(self.store.read().await.working_directory())
-            .map_err(ChipmunkError::WalRestoreDirectory)?;
-        let files = files
-            .filter(|d| d.is_ok())
-            .map(|entry| {
-                let entry = entry.unwrap();
-                let name = entry.file_name();
-                if name.to_string_lossy().contains("wal") && entry.metadata().unwrap().len() > 0 {
-                    Some(entry)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if files.is_empty() {
-            debug!("Restore will not be attempted");
-            Ok(false)
-        } else {
-            debug!(num_files = files.len(), "Restore can be attempted");
-            Ok(true)
-        }
+    /// A restore will performed when previous WAL files were found within the
+    /// current working directory for chipmunk.
+    pub async fn restore(&self) -> Result<(), ChipmunkError> {
+        self.store.write().await.restore()?;
+        Ok(())
     }
 }
 
