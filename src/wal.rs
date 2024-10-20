@@ -64,7 +64,9 @@ impl Wal {
             }
         })?;
 
+        let mut segment_count = 0;
         for (i, s) in segment_files.into_iter().enumerate() {
+            segment_count += 1;
             let segment = s.expect("Valid file within log directory");
             if !segment.file_type().unwrap().is_file() {
                 debug!(name=?segment.file_name(), "Skipping directory during restore");
@@ -110,6 +112,7 @@ impl Wal {
             info!(bytes_read, current_segment = i, "Completed segment");
             self.append_batch(buf)?;
         }
+        info!(segment_count, "Restore segments");
 
         Ok(())
     }
