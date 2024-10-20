@@ -109,7 +109,7 @@ impl Chipmunk {
             debug!("Restore will not be attempted");
             Ok(false)
         } else {
-            debug!(num_files = files.len(), "Restore will be attempted");
+            debug!(num_files = files.len(), "Restore can be attempted");
             Ok(true)
         }
     }
