@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 
 use crate::ChipmunkError;
 
+/// Errors that originate from interacting with a remote chipmunk store.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("unable to get key '{key_name}': {source}")]
@@ -29,11 +30,13 @@ pub enum ClientError {
     },
 }
 
+/// Interact with a remote chipmunk store.
 pub struct ChipmunkClient {
     host: SocketAddr,
 }
 
 impl ChipmunkClient {
+    /// Attempt to create a new [`ChipmunkClient`].
     pub fn try_new(host: String) -> Result<Self, ClientError> {
         Ok(Self {
             host: host
