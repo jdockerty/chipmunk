@@ -27,9 +27,6 @@ pub enum ClientError {
         host: String,
         source: std::net::AddrParseError,
     },
-
-    #[error("unable to ping remote server: {0}")]
-    RemotePing(tokio::io::Error),
 }
 
 pub struct ChipmunkClient {
