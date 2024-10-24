@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use axum::http::StatusCode;
 
+pub mod client;
 pub mod config;
 pub mod server;
 
