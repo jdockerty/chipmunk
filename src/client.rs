@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::ChipmunkError;
+use reqwest::StatusCode;
 
 /// Errors that originate from interacting with a remote chipmunk store.
 #[derive(Debug, thiserror::Error)]
@@ -8,19 +8,19 @@ pub enum ClientError {
     #[error("unable to get key '{key_name}': {source}")]
     GetOp {
         key_name: String,
-        source: ChipmunkError,
+        source: reqwest::Error,
     },
 
     #[error("unable to insert key '{key_name}': {source}")]
     InsertOp {
         key_name: String,
-        source: ChipmunkError,
+        source: reqwest::Error,
     },
 
     #[error("unable to delete key '{key_name}': {source}")]
     DeleteOp {
         key_name: String,
-        source: ChipmunkError,
+        source: reqwest::Error,
     },
 
     #[error("unable to parse given host '{host}': {source}")]
