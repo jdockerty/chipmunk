@@ -26,7 +26,7 @@ struct Cli {
     /// Maximium size, in bytes, of the WAL before rotation should occur.
     ///
     /// Default to 8 MiB.
-    #[arg(long, default_value = "8388608")] //
+    #[arg(long, default_value = "8388608")]
     wal_max_size_bytes: u64,
 
     /// Size, in bytes, of the internal WAL buffer.
