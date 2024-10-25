@@ -13,6 +13,8 @@ struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Commands {
+    /// Perform a health check against the store.
+    Health,
     /// Get a value from the store, addressed by key.
     Get { key: String },
     /// Insert a key-value pair to the store.
@@ -25,7 +27,7 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let cli = Cli::parse();
 
-    let client = ChipmunkClient::try_new(cli.host)?;
+    let client = ChipmunkClient::try_new(cli.host.clone())?;
 
     match cli.commands {
         Commands::Get { key } => {
@@ -36,6 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
         Commands::Insert { key, value } => client.insert(&key, &value).await?,
         Commands::Delete { key } => client.delete(&key).await?,
+        Commands::Health => match client.ping().await {
+            Some(_) => println!("{} is healthy", cli.host),
+            None => println!("{} is unhealthy", cli.host),
+        },
     }
     Ok(())
 }
