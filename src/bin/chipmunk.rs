@@ -20,6 +20,8 @@ struct Cli {
     log_level: clap_verbosity::Verbosity<InfoLevel>,
 
     /// Directory that WAL segments should be written to.
+    ///
+    /// Defaults to the current directory.
     #[arg(long, default_value = "./")]
     wal_directory: PathBuf,
 
