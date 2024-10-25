@@ -29,6 +29,10 @@ struct Cli {
     #[arg(long, default_value = "8388608")] //
     wal_max_size_bytes: u64,
 
+    /// Size, in bytes, of the internal WAL buffer.
+    #[arg(long)]
+    wal_buffer_size_bytes: Option<usize>,
+
     /// Maximium size, in bytes, of the memtable before it is flushed to disk.
     ///
     /// Defaults to 8 MiB.
@@ -49,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             id: 0,
             max_size: cli.wal_max_size_bytes,
             log_directory: cli.wal_directory,
-            buffer_size: None,
+            buffer_size: cli.wal_buffer_size_bytes,
         },
         memtable: MemtableConfig {
             id: 0,
