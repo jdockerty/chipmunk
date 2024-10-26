@@ -417,4 +417,37 @@ mod test {
         assert_eq!(wal.closed_segments.len(), 1);
         assert_eq!(wal.segment.id(), 1);
     }
+
+    #[test]
+    fn segment_deletion() {
+        let temp_dir = TempDir::new("clear_segments").unwrap();
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
+
+        let segment_count = 5;
+        for i in 0..segment_count {
+            for _ in 0..3 {
+                wal.append(WalEntry::Put {
+                    key: b"foo".to_vec(),
+                    value: b"bar".to_vec(),
+                })
+                .unwrap();
+            }
+            assert_eq!(wal.segment.id(), i);
+            wal.rotate().expect("Can rotate WAL during test");
+            assert_eq!(wal.segment.id(), i + 1);
+        }
+
+        assert_eq!(wal.closed_segments.len(), 5);
+        assert_eq!(wal.segment.id(), 5, "Current active segment ID should be 5");
+
+        let removed = wal
+            .remove_closed_segments()
+            .expect("Can remove segments in test");
+        assert_eq!(removed, segment_count);
+        assert_eq!(
+            wal.closed_segments().len(),
+            0,
+            "There should be no closed segments remaining after removal"
+        );
+    }
 }
