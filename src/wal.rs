@@ -19,6 +19,7 @@ const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
+#[derive(Debug)]
 pub struct Wal {
     log_directory: PathBuf,
     current_size: u64,
@@ -202,8 +203,24 @@ impl Wal {
     pub fn clear_segments(&mut self) {
         self.closed_segments.clear();
     }
+
+    /// Remove closed segments and return the number of segments that were
+    /// removed.
+    pub fn remove_closed_segments(&mut self) -> Result<u64, ChipmunkError> {
+        let segments = self.closed_segments();
+        let mut cleared = 0;
+
+        for s in segments {
+            let segment_path = format!("{}/{}.wal", self.log_directory.display(), s);
+            std::fs::remove_file(&segment_path).map_err(ChipmunkError::SegmentDelete)?;
+            cleared += 1;
+        }
+        self.clear_segments();
+        Ok(cleared)
+    }
 }
 
+#[derive(Debug)]
 struct Segment {
     /// ID of the segment.
     id: AtomicU64,
@@ -399,5 +416,38 @@ mod test {
         assert_ne!(wal.segment.id(), 0, "WAL rotation has not occurred");
         assert_eq!(wal.closed_segments.len(), 1);
         assert_eq!(wal.segment.id(), 1);
+    }
+
+    #[test]
+    fn segment_deletion() {
+        let temp_dir = TempDir::new("clear_segments").unwrap();
+        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
+
+        let segment_count = 5;
+        for i in 0..segment_count {
+            for _ in 0..3 {
+                wal.append(WalEntry::Put {
+                    key: b"foo".to_vec(),
+                    value: b"bar".to_vec(),
+                })
+                .unwrap();
+            }
+            assert_eq!(wal.segment.id(), i);
+            wal.rotate().expect("Can rotate WAL during test");
+            assert_eq!(wal.segment.id(), i + 1);
+        }
+
+        assert_eq!(wal.closed_segments.len(), 5);
+        assert_eq!(wal.segment.id(), 5, "Current active segment ID should be 5");
+
+        let removed = wal
+            .remove_closed_segments()
+            .expect("Can remove segments in test");
+        assert_eq!(removed, segment_count);
+        assert_eq!(
+            wal.closed_segments().len(),
+            0,
+            "There should be no closed segments remaining after removal"
+        );
     }
 }
