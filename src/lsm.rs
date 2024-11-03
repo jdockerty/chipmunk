@@ -86,6 +86,11 @@ impl Lsm {
         if self.memtable.size() > self.memtable_config.max_size {
             info!("Memtable rotation");
             self.rotate_memtable();
+
+            // Remove the closed WAL segments after the Memtable has been flushed
+            // to disk, these are no longer required as the memtable has been
+            // persisted already.
+            self.remove_closed_segments()?;
         }
 
         // This compaction trigger is not very scientific at the moment.
@@ -108,6 +113,7 @@ impl Lsm {
     /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
     /// has been flushed to an [`SSTable`].
     pub fn remove_closed_segments(&self) -> Result<(), ChipmunkError> {
+        info!("Removing closed segments");
         let mut wal = self.wal.lock();
         for segment_id in wal.closed_segments().iter() {
             let path = format!("{}/{segment_id}.wal", self.working_directory.display());
