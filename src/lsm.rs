@@ -72,7 +72,11 @@ impl Lsm {
         };
 
         {
-            self.wal.lock().append(entry)?;
+            let mut wal = self.wal.lock();
+            wal.append(entry)?;
+            if wal.size() >= self.wal_config.max_size {
+                wal.rotate()?;
+            }
         }
 
         // Populate the internal bloom filter
