@@ -29,7 +29,6 @@ pub struct Lsm {
     memtable_config: MemtableConfig,
 
     /// IDs of the now immutable memtables
-    /// TODO: hold these in memory too, so that I/O is greatly reduced?
     sstables: Mutex<Vec<u64>>,
 
     bloom: Mutex<BloomFilter<Vec<u8>>>,
@@ -102,9 +101,6 @@ impl Lsm {
     }
 
     /// Force a rotation of the current [`Memtable`].
-    ///
-    /// TODO: can we hold the various sealed tables in memory too for reduced I/O
-    /// on get(k)?
     pub fn rotate_memtable(&self) {
         self.sstables.lock().push(self.memtable.id());
         self.memtable.flush(self.working_directory.clone());
