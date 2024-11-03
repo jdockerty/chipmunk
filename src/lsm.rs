@@ -103,14 +103,15 @@ impl Lsm {
 
     /// Remove closed [`Segment`] files. This should only be called when the [`Memtable`]
     /// has been flushed to an [`SSTable`].
-    pub fn remove_closed_segments(&self) {
+    pub fn remove_closed_segments(&self) -> Result<(), ChipmunkError> {
         let mut wal = self.wal.lock();
-        wal.closed_segments().iter().for_each(|segment_id| {
+        for segment_id in wal.closed_segments().iter() {
             let path = format!("{}/{segment_id}.wal", self.working_directory.display());
             debug!(path, "Removing segment");
-            std::fs::remove_file(&path).unwrap()
-        });
+            std::fs::remove_file(&path).map_err(ChipmunkError::SegmentDelete)?;
+        }
         wal.clear_segments();
+        Ok(())
     }
 
     /// Force a compaction cycle to occur.
@@ -459,7 +460,7 @@ mod test {
                 "WAL segments should exist after rotation"
             );
         }
-        lsm.remove_closed_segments();
+        lsm.remove_closed_segments().unwrap();
         for i in 0..5 {
             assert!(!Path::new(&format!("{}/{}.wal", lsm.working_directory.display(), i)).exists());
         }
