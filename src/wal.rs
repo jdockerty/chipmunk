@@ -70,8 +70,7 @@ impl Wal {
         })?;
 
         let mut segment_count = 0;
-        for (i, s) in segment_files.into_iter().enumerate() {
-            segment_count += 1;
+        for s in segment_files.into_iter() {
             let segment = s.expect("Valid file within log directory");
             if !segment.file_type().unwrap().is_file() {
                 debug!(name=?segment.file_name(), "Skipping directory during restore");
@@ -87,14 +86,15 @@ impl Wal {
                 info!(name=?segment.file_name(), "Skipping empty WAL");
                 continue;
             }
-
+            // Only include segments which are valid
+            segment_count += 1;
             let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
             let mut bytes_read = 0;
             let max_bytes = segment_file.metadata().expect("Can read metadata").len();
             info!(
                 name = ?segment.file_name(),
                 segment_size = max_bytes,
-                current_segment_number = i,
+                current_segment_number = segment_count,
                 "Restoring segment"
             );
             let reader = BufReader::new(segment_file);
@@ -109,10 +109,14 @@ impl Wal {
                 bytes_read += line.as_bytes().len();
                 buf.push(WalEntry::from_bytes(line.as_bytes()));
             }
-            info!(bytes_read, current_segment = i, "Completed segment");
+            info!(
+                bytes_read,
+                current_segment = segment_count,
+                "Completed segment"
+            );
             self.append_batch(buf)?;
         }
-        info!(segment_count, "Restore segments");
+        info!(total_segments = segment_count, "Restored segments");
 
         Ok(())
     }
