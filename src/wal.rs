@@ -145,7 +145,7 @@ impl Wal {
 
         for e in entries {
             self.buffer
-                .write(&e.as_bytes())
+                .write_all(&e.as_bytes())
                 .expect("Can write known entry to buffer");
         }
         self.segment
@@ -278,16 +278,16 @@ impl WalEntry {
             Self::Put { key, value } => {
                 buf.write_u8(WAL_INSERT_MARKER).unwrap();
                 buf.write_u64::<BigEndian>(key.len() as u64).unwrap();
-                buf.write(&key).unwrap();
+                buf.write_all(key).unwrap();
                 buf.write_u64::<BigEndian>(value.len() as u64).unwrap();
-                buf.write(&value).unwrap();
-                buf.write(b"\n").unwrap();
+                buf.write_all(value).unwrap();
+                buf.write_all(b"\n").unwrap();
             }
             Self::Delete { key } => {
                 buf.write_u8(WAL_DELETE_MARKER).unwrap();
                 buf.write_u64::<BigEndian>(key.len() as u64).unwrap();
-                buf.write(&key).unwrap();
-                buf.write(b"\n").unwrap();
+                buf.write_all(key).unwrap();
+                buf.write_all(b"\n").unwrap();
             }
         }
         buf.shrink_to_fit();
