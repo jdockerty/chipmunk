@@ -101,8 +101,8 @@ impl Wal {
             );
             let mut reader = BufReader::new(segment_file);
             let mut entries = Vec::new();
+            let mut append_size = 0;
             loop {
-                let mut append_size = 0;
                 // Read the entry marker (1 byte)
                 let mut marker_buf = [0u8; 1];
                 if reader.read_exact(&mut marker_buf).is_err() {
@@ -111,54 +111,10 @@ impl Wal {
                 }
                 let marker = marker_buf[0];
                 append_size += marker_buf.len();
-
-                match marker {
-                    // Put entry
-                    0 => {
-                        // Read key size (8 bytes)
-                        let mut key_size_buf = [0u8; 8];
-                        reader.read_exact(&mut key_size_buf).unwrap();
-                        append_size += key_size_buf.len();
-                        let key_size = u64::from_le_bytes(key_size_buf) as usize;
-
-                        // Read key
-                        let mut key = vec![0u8; key_size];
-                        reader.read_exact(&mut key).unwrap();
-                        append_size += key.len();
-
-                        // Read value size (8 bytes)
-                        let mut value_size_buf = [0u8; 8];
-                        reader.read_exact(&mut value_size_buf).unwrap();
-                        append_size += value_size_buf.len();
-                        let value_size = u64::from_le_bytes(value_size_buf) as usize;
-
-                        // Read value
-                        let mut value = vec![0u8; value_size];
-                        reader.read_exact(&mut value).unwrap();
-                        append_size += value.len();
-
-                        entries.push(WalEntry::Put { key, value });
-                    }
-                    // Delete entry
-                    1 => {
-                        // Read key size (8 bytes)
-                        let mut key_size_buf = [0u8; 8];
-                        reader.read_exact(&mut key_size_buf).unwrap();
-                        append_size += key_size_buf.len();
-                        let key_size = u64::from_le_bytes(key_size_buf) as usize;
-
-                        // Read key
-                        let mut key = vec![0u8; key_size];
-                        reader.read_exact(&mut key).unwrap();
-                        append_size += key.len();
-
-                        entries.push(WalEntry::Delete { key });
-                    }
-                    _ => panic!("Invalid marker"),
-                }
-                self.current_size += append_size as u64;
+                entries.push(read_entry(&mut reader, marker));
             }
             info!(bytes_read, current_segment = i, "Completed segment");
+            println!("Appending {append_size}, Current {}", self.current_size);
             for e in entries {
                 self.append(e).unwrap();
             }
@@ -304,17 +260,51 @@ impl Wal {
     }
 }
 
-fn read_n<R>(reader: &mut R, bytes_to_read: u64) -> Vec<u8>
-where
-    R: Read,
-{
-    let mut buf = vec![];
-    let mut chunk = reader.take(bytes_to_read);
-    // Do appropriate error handling for your situation
-    // Maybe it's OK if you didn't read enough bytes?
-    let n = chunk.read_to_end(&mut buf).expect("Didn't read enough");
-    assert_eq!(bytes_to_read as usize, n);
-    buf
+fn read_entry(reader: &mut impl BufRead, marker: u8) -> WalEntry {
+    match marker {
+        // Put entry
+        0 => {
+            // Read key size (8 bytes)
+            let mut key_size_buf = [0u8; 8];
+            reader.read_exact(&mut key_size_buf).unwrap();
+            let key_size = u64::from_le_bytes(key_size_buf) as usize;
+
+            // Read key
+            let mut key = vec![0u8; key_size];
+            reader.read_exact(&mut key).unwrap();
+
+            // Read value size (8 bytes)
+            let mut value_size_buf = [0u8; 8];
+            reader.read_exact(&mut value_size_buf).unwrap();
+            let value_size = u64::from_le_bytes(value_size_buf) as usize;
+
+            // Read value
+            let mut value = vec![0u8; value_size];
+            reader.read_exact(&mut value).unwrap();
+            println!(
+                "INSERT {}={}",
+                String::from_utf8_lossy(&key),
+                String::from_utf8_lossy(&value)
+            );
+
+            WalEntry::Put { key, value }
+        }
+        // Delete entry
+        1 => {
+            // Read key size (8 bytes)
+            let mut key_size_buf = [0u8; 8];
+            reader.read_exact(&mut key_size_buf).unwrap();
+            let key_size = u64::from_le_bytes(key_size_buf) as usize;
+
+            // Read key
+            let mut key = vec![0u8; key_size];
+            reader.read_exact(&mut key).unwrap();
+
+            println!("DELETE {}", String::from_utf8_lossy(&key));
+            WalEntry::Delete { key }
+        }
+        _ => panic!("Invalid marker"),
+    }
 }
 
 impl Drop for Wal {
@@ -416,7 +406,7 @@ mod test {
         );
 
         let file = std::fs::File::open(wal.path()).unwrap();
-        let entry: WalEntry = bincode::deserialize_from(&file).unwrap();
+        let entry: WalEntry = read_entry(&mut BufReader::new(file), 0);
         match entry {
             WalEntry::Put { key, value } => {
                 assert_eq!(&String::from_utf8_lossy(&key), "foo");
