@@ -18,9 +18,6 @@ pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 // crate for a sane default size.
 const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
 
-/// Magic bytes header for the WAL file.
-const WAL_HEADER: &str = "ch1";
-
 const WAL_INSERT_MARKER: u8 = 0;
 const WAL_DELETE_MARKER: u8 = 1;
 

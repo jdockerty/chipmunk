@@ -251,6 +251,7 @@ dependencies = [
  "axum",
  "bincode",
  "bloomfx",
+ "byteorder",
  "bytes",
  "chrono",
  "clap",
