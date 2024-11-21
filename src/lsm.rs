@@ -249,8 +249,8 @@ impl Lsm {
             for line in wal.lines()? {
                 match line {
                     Ok(line) => {
-                        let line: WalEntry = WalEntry::from_bytes(line.as_bytes());
-                        match line {
+                        let entry: WalEntry = WalEntry::from_bytes(line.as_bytes());
+                        match entry {
                             WalEntry::Put { key, value } => {
                                 self.memtable.insert(key, value);
                             }
