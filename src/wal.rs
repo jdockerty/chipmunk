@@ -1,13 +1,14 @@
 // TODO: remove once used in other components
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader, Lines, Write};
+use std::io::{BufRead, BufReader, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::ChipmunkError;
 
@@ -16,6 +17,12 @@ pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 // Taken from the Rust [sys_common](https://doc.rust-lang.org/src/std/sys_common/io.rs.html#3)
 // crate for a sane default size.
 const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
+
+/// Magic bytes header for the WAL file.
+const WAL_HEADER: &str = "ch1";
+
+const WAL_INSERT_MARKER: u8 = 0;
+const WAL_DELETE_MARKER: u8 = 1;
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
@@ -102,13 +109,8 @@ impl Wal {
 
             for line in reader.lines() {
                 let line = line.expect("WAL contains valid utf8");
-
                 bytes_read += line.as_bytes().len();
-                match bincode::deserialize(line.as_bytes()) {
-                    Ok(entry) => buf.push(entry),
-                    // Invalid entries are skipped and not restored
-                    Err(e) => error!(error=%e, "Invalid entry in segment"),
-                }
+                buf.push(WalEntry::from_bytes(line.as_bytes()));
             }
             info!(bytes_read, current_segment = i, "Completed segment");
             self.append_batch(buf)?;
@@ -145,14 +147,15 @@ impl Wal {
         assert_eq!(self.buffer.len(), 0);
 
         for e in entries {
-            // TODO: create append_entry func which is generic over Write trait
-            bincode::serialize_into(&mut self.buffer, &e).expect("Can write known entry to buffer");
-            writeln!(&mut self.buffer).expect("Can write known entry to buffer");
+            self.buffer
+                .write(&e.as_bytes())
+                .expect("Can write known entry to buffer");
         }
         self.segment
             .log_file
             .write_all(&self.buffer)
             .map_err(ChipmunkError::WalAppend)?;
+        self.segment.log_file.flush().unwrap();
         let buffer_size = self.buffer.len() as u64;
         self.current_size += buffer_size;
 
@@ -265,15 +268,87 @@ impl Segment {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WalEntry {
     Put { key: Vec<u8>, value: Vec<u8> },
     Delete { key: Vec<u8> },
 }
 
+impl WalEntry {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(1024);
+        match self {
+            Self::Put { key, value } => {
+                buf.write_u8(WAL_INSERT_MARKER).unwrap();
+                buf.write_u64::<BigEndian>(key.len() as u64).unwrap();
+                buf.write(&key).unwrap();
+                buf.write_u64::<BigEndian>(value.len() as u64).unwrap();
+                buf.write(&value).unwrap();
+                buf.write(b"\n").unwrap();
+            }
+            Self::Delete { key } => {
+                buf.write_u8(WAL_DELETE_MARKER).unwrap();
+                buf.write_u64::<BigEndian>(key.len() as u64).unwrap();
+                buf.write(&key).unwrap();
+                buf.write(b"\n").unwrap();
+            }
+        }
+        buf.shrink_to_fit();
+        buf
+    }
+
+    pub fn from_bytes(mut reader: &[u8]) -> WalEntry {
+        let marker = reader.read_u8().unwrap();
+        match marker {
+            WAL_INSERT_MARKER => {
+                let key_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut key = vec![0; key_sz as usize];
+                reader.read_exact(&mut key).unwrap();
+
+                let value_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut value = vec![0; value_sz as usize];
+                reader.read_exact(&mut value).unwrap();
+
+                WalEntry::Put { key, value }
+            }
+            WAL_DELETE_MARKER => {
+                let key_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut key = vec![0; key_sz as usize];
+                reader.read_exact(&mut key).unwrap();
+                WalEntry::Delete { key }
+            }
+            _ => panic!("Unknown marker encountered"),
+        }
+    }
+
+    pub fn from_reader<R: Read>(reader: &mut R) -> WalEntry {
+        let marker = reader.read_u8().unwrap();
+        match marker {
+            WAL_INSERT_MARKER => {
+                let key_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut key = vec![0; key_sz as usize];
+                reader.read_exact(&mut key).unwrap();
+
+                let value_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut value = vec![0; value_sz as usize];
+                reader.read_exact(&mut value).unwrap();
+
+                WalEntry::Put { key, value }
+            }
+            WAL_DELETE_MARKER => {
+                let key_sz = reader.read_u64::<BigEndian>().unwrap();
+                let mut key = vec![0; key_sz as usize];
+                reader.read_exact(&mut key).unwrap();
+                WalEntry::Delete { key }
+            }
+            _ => panic!("Unknown marker encountered"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Cursor, Seek};
 
     use super::*;
 
@@ -295,6 +370,25 @@ mod test {
     }
 
     #[test]
+    fn wal_entry_bytes() {
+        let mut buf = Cursor::new(Vec::new());
+        let entry = WalEntry::Put {
+            key: b"hello".to_vec(),
+            value: b"world".to_vec(),
+        };
+
+        assert!(
+            buf.write(&entry.as_bytes()).unwrap() > 0,
+            "Expected non-zero write"
+        );
+
+        // Reset the cursor after writing
+        buf.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read_entry = WalEntry::from_reader(&mut buf);
+        assert_eq!(entry, read_entry);
+    }
+
+    #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
@@ -302,8 +396,8 @@ mod test {
         let wrote = wal.append_batch(put_entries()).unwrap();
         assert_eq!(wal.current_size, wrote);
 
-        let file = std::fs::File::open(wal.path()).unwrap();
-        let entry: WalEntry = bincode::deserialize_from(&file).unwrap();
+        let mut file = std::fs::File::open(wal.path()).unwrap();
+        let entry: WalEntry = WalEntry::from_reader(&mut file);
         match entry {
             WalEntry::Put { key, value } => {
                 assert_eq!(&String::from_utf8_lossy(&key), "foo");
@@ -325,7 +419,7 @@ mod test {
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
         for line in wal_file.lines() {
-            let entry: WalEntry = bincode::deserialize(line.unwrap().as_bytes()).unwrap();
+            let entry: WalEntry = WalEntry::from_bytes(line.unwrap().as_bytes());
             match entry {
                 WalEntry::Put { key, value } => {
                     assert_eq!(&String::from_utf8_lossy(&key), "foo");
