@@ -1,7 +1,7 @@
 // TODO: remove once used in other components
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader, Lines, Write};
+use std::io::{BufRead, BufReader, Lines, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
@@ -24,7 +24,16 @@ pub struct Wal {
     log_directory: PathBuf,
     current_size: u64,
     max_size: u64,
+    /// In-memory buffer used for appends to the WAL. Writes are initially
+    /// held within an, ideally, small buffer before being flushed to the active
+    /// segment in order to reduce frequent syscalls.
+    ///
+    /// It is expected that this buffer is not excessively large, otherwise
+    /// there is a higher risk that writes are lost from a crash or unexpected
+    /// panic.
     buffer: Vec<u8>,
+    /// Size of the configured in-memory buffer.
+    buffer_size: usize,
 
     /// Closed, immutable WAL segment IDs.
     ///
@@ -38,17 +47,14 @@ pub struct Wal {
 
 impl Wal {
     pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
-        let buf = if let Some(size) = buffer_size {
-            Vec::with_capacity(size)
-        } else {
-            Vec::with_capacity(DEFAULT_BUFFER_SIZE)
-        };
+        let buffer_size = buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE);
 
         Self {
             log_directory: log_directory.to_path_buf(),
             current_size: 0,
             max_size,
-            buffer: buf,
+            buffer: Vec::with_capacity(buffer_size),
+            buffer_size,
             segment: Segment::try_new(id, log_directory).unwrap(),
             closed_segments: Vec::new(),
         }
@@ -79,39 +85,39 @@ impl Wal {
                 continue;
             }
 
-            if segment.metadata().unwrap().len() == 0 {
+            let segment_size = segment.metadata().unwrap().len();
+            if segment_size == 0 {
                 info!(name=?segment.file_name(), "Skipping empty WAL");
                 continue;
             }
 
             let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
-            let mut bytes_read = 0;
-            let max_bytes = segment_file.metadata().expect("Can read metadata").len();
+            let bytes_read = 0;
             info!(
                 name = ?segment.file_name(),
-                segment_size = max_bytes,
-                current_segment_number = i,
+                segment_size,
+                current_segment_number = segment_count,
                 "Restoring segment"
             );
-            let reader = BufReader::new(segment_file);
-
-            // The segments are bounded by the [`WAL_MAX_SEGMENT_SIZE_BYTES`]
-            // so this ensures the files themselves do not become huge for this
-            // operation.
-            let mut buf = Vec::new();
-
-            for line in reader.lines() {
-                let line = line.expect("WAL contains valid utf8");
-
-                bytes_read += line.as_bytes().len();
-                match bincode::deserialize(line.as_bytes()) {
-                    Ok(entry) => buf.push(entry),
-                    // Invalid entries are skipped and not restored
-                    Err(e) => error!(error=%e, "Invalid entry in segment"),
+            let mut reader = BufReader::new(segment_file);
+            let mut entries = Vec::new();
+            let mut append_size = 0;
+            loop {
+                // Read the entry marker (1 byte)
+                let mut marker_buf = [0u8; 1];
+                if reader.read_exact(&mut marker_buf).is_err() {
+                    // Stop at EOF
+                    break;
                 }
+                let marker = marker_buf[0];
+                append_size += marker_buf.len();
+                entries.push(read_entry(&mut reader, marker));
             }
             info!(bytes_read, current_segment = i, "Completed segment");
-            self.append_batch(buf)?;
+            println!("Appending {append_size}, Current {}", self.current_size);
+            for e in entries {
+                self.append(e).unwrap();
+            }
         }
         info!(segment_count, "Restore segments");
 
@@ -133,7 +139,35 @@ impl Wal {
 
     /// Append a [`WalEntry`] to the WAL file.
     pub fn append(&mut self, entry: WalEntry) -> Result<u64, ChipmunkError> {
-        self.append_batch(vec![entry])
+        let append_size = match entry {
+            WalEntry::Put { ref key, ref value } => {
+                let put_marker = &0_u8.to_le_bytes();
+                let key_size = key.len().to_le_bytes();
+                let value_size = value.len().to_le_bytes();
+                self.buffer.write(put_marker).unwrap();
+                self.buffer.write(&key_size).unwrap();
+                self.buffer.write(key).unwrap();
+                self.buffer.write(&value_size).unwrap();
+                self.buffer.write(value).unwrap();
+
+                put_marker.len() as u64
+                    + key_size.len() as u64
+                    + key.len() as u64
+                    + value_size.len() as u64
+                    + value.len() as u64
+            }
+            WalEntry::Delete { ref key } => {
+                let delete_marker = &1_u8.to_le_bytes();
+                let key_size = key.len().to_le_bytes();
+                self.buffer.write(delete_marker).unwrap();
+                self.buffer.write(&key_size).unwrap();
+                self.buffer.write(key).unwrap();
+                delete_marker.len() as u64 + key_size.len() as u64 + key.len() as u64
+            }
+        };
+        self.current_size += append_size;
+        self.maybe_flush_buffer(false)?;
+        Ok(append_size)
     }
 
     /// Append a batch of [`WalEntry`] into the current log file.
@@ -144,23 +178,29 @@ impl Wal {
         // as more and more data is added.
         assert_eq!(self.buffer.len(), 0);
 
+        let mut write_size: u64 = 0;
         for e in entries {
-            // TODO: create append_entry func which is generic over Write trait
-            bincode::serialize_into(&mut self.buffer, &e).expect("Can write known entry to buffer");
-            writeln!(&mut self.buffer).expect("Can write known entry to buffer");
+            write_size += self.append(e).unwrap();
         }
-        self.segment
-            .log_file
-            .write_all(&self.buffer)
-            .map_err(ChipmunkError::WalAppend)?;
-        let buffer_size = self.buffer.len() as u64;
-        self.current_size += buffer_size;
+        self.maybe_flush_buffer(true)?;
+        Ok(write_size)
+    }
 
-        // The buffer has been written, we do not need to keep it around otherwise
-        // we risk misinforming the current segment size, as well as appending
-        // pre-existing data.
-        self.buffer.clear();
-        Ok(buffer_size)
+    fn maybe_flush_buffer(&mut self, force: bool) -> Result<(), ChipmunkError> {
+        if self.buffer.len() >= self.buffer_size || force {
+            self.segment
+                .log_file
+                .write_all(&self.buffer)
+                .map_err(ChipmunkError::WalAppend)?;
+            self.segment.log_file.flush().unwrap();
+            // The buffer has been written, we do not need to keep it around otherwise
+            // we risk misinforming the current segment size, as well as appending
+            // pre-existing data.
+            self.buffer.clear();
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 
     /// Get the current path of the active WAL segment file.
@@ -217,6 +257,60 @@ impl Wal {
         }
         self.clear_segments();
         Ok(cleared)
+    }
+}
+
+fn read_entry(reader: &mut impl BufRead, marker: u8) -> WalEntry {
+    match marker {
+        // Put entry
+        0 => {
+            // Read key size (8 bytes)
+            let mut key_size_buf = [0u8; 8];
+            reader.read_exact(&mut key_size_buf).unwrap();
+            let key_size = u64::from_le_bytes(key_size_buf) as usize;
+
+            // Read key
+            let mut key = vec![0u8; key_size];
+            reader.read_exact(&mut key).unwrap();
+
+            // Read value size (8 bytes)
+            let mut value_size_buf = [0u8; 8];
+            reader.read_exact(&mut value_size_buf).unwrap();
+            let value_size = u64::from_le_bytes(value_size_buf) as usize;
+
+            // Read value
+            let mut value = vec![0u8; value_size];
+            reader.read_exact(&mut value).unwrap();
+            println!(
+                "INSERT {}={}",
+                String::from_utf8_lossy(&key),
+                String::from_utf8_lossy(&value)
+            );
+
+            WalEntry::Put { key, value }
+        }
+        // Delete entry
+        1 => {
+            // Read key size (8 bytes)
+            let mut key_size_buf = [0u8; 8];
+            reader.read_exact(&mut key_size_buf).unwrap();
+            let key_size = u64::from_le_bytes(key_size_buf) as usize;
+
+            // Read key
+            let mut key = vec![0u8; key_size];
+            reader.read_exact(&mut key).unwrap();
+
+            println!("DELETE {}", String::from_utf8_lossy(&key));
+            WalEntry::Delete { key }
+        }
+        _ => panic!("Invalid marker"),
+    }
+}
+
+impl Drop for Wal {
+    fn drop(&mut self) {
+        self.maybe_flush_buffer(true)
+            .expect("Forced flush from in-memory buffer");
     }
 }
 
@@ -297,13 +391,22 @@ mod test {
     #[test]
     fn write_to_wal() {
         let temp_dir = TempDir::new("write_wal").unwrap();
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
+        let mut wal = Wal::new(
+            0,
+            temp_dir.path(),
+            WAL_MAX_SEGMENT_SIZE_BYTES,
+            Some(DEFAULT_BUFFER_SIZE),
+        );
 
         let wrote = wal.append_batch(put_entries()).unwrap();
-        assert_eq!(wal.current_size, wrote);
+        assert_eq!(
+            wal.current_size, wrote,
+            "WAL size should be the same as bytes written for first batch. Size={}, Written={}",
+            wal.current_size, wrote
+        );
 
         let file = std::fs::File::open(wal.path()).unwrap();
-        let entry: WalEntry = bincode::deserialize_from(&file).unwrap();
+        let entry: WalEntry = read_entry(&mut BufReader::new(file), 0);
         match entry {
             WalEntry::Put { key, value } => {
                 assert_eq!(&String::from_utf8_lossy(&key), "foo");
