@@ -1,6 +1,7 @@
 // TODO: remove once used in other components
 #![allow(dead_code)]
 
+use std::fmt::Display;
 use std::io::{BufRead, BufReader, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -20,6 +21,8 @@ const DEFAULT_BUFFER_SIZE: usize = 8 * 1024;
 
 const WAL_INSERT_MARKER: u8 = 0;
 const WAL_DELETE_MARKER: u8 = 1;
+
+const WAL_HEADER: &str = "ch1";
 
 /// Wal maintains a write-ahead log (WAL) as an append-only file to provide persistence
 /// across crashes of the system.
@@ -343,6 +346,22 @@ impl WalEntry {
                 WalEntry::Delete { key }
             }
             _ => panic!("Unknown marker encountered"),
+        }
+    }
+}
+
+impl Display for WalEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Put { key, value } => {
+                write!(
+                    f,
+                    "PUT {}={}",
+                    String::from_utf8_lossy(key),
+                    String::from_utf8_lossy(value)
+                )
+            }
+            Self::Delete { key } => write!(f, "DELETE {}", String::from_utf8_lossy(key)),
         }
     }
 }
