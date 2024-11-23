@@ -86,12 +86,14 @@ impl Wal {
             }
 
             if segment.metadata().unwrap().len() == 0 {
-                info!(name=?segment.file_name(), "Skipping empty WAL");
+                info!(name=?segment.file_name(), "Skipping empty WAL segment");
                 continue;
             }
+            let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
+
             // Only include segments which are valid
             segment_count += 1;
-            let segment_file = File::open(segment.path()).map_err(ChipmunkError::SegmentOpen)?;
+
             let mut bytes_read = 0;
             let max_bytes = segment_file.metadata().expect("Can read metadata").len();
             info!(
@@ -107,7 +109,7 @@ impl Wal {
             // operation.
             let mut buf = Vec::new();
 
-            for line in reader.lines() {
+            for line in reader.lines().skip(1) {
                 let line = line.expect("WAL contains valid utf8");
                 bytes_read += line.as_bytes().len();
                 buf.push(WalEntry::from_bytes(line.as_bytes()));
@@ -242,17 +244,17 @@ impl Segment {
     /// When the underlying file for the segment cannot be created with write
     /// permissions.
     pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
+        let log_file_path = format!("{}/{}.wal", path.display(), id);
         let id = AtomicU64::new(id);
-        let log_file_path = format!(
-            "{}/{}.wal",
-            path.display(),
-            id.load(std::sync::atomic::Ordering::Acquire)
-        );
-        let new_segment = std::fs::OpenOptions::new()
-            .create(true)
+        let mut new_segment = std::fs::OpenOptions::new()
+            .create_new(true) // The new segment MUST NOT exist
             .append(true)
             .open(log_file_path)
             .map_err(ChipmunkError::SegmentOpen)?;
+
+        let header = format!("{WAL_HEADER}\n");
+
+        new_segment.write_all(header.as_bytes()).unwrap();
 
         Ok(Self {
             id,
@@ -417,6 +419,9 @@ mod test {
         assert_eq!(wal.current_size, wrote);
 
         let mut file = std::fs::File::open(wal.path()).unwrap();
+        // Skip over the WAL header for the entry read
+        file.seek(std::io::SeekFrom::Start((WAL_HEADER.len() + 1) as u64))
+            .unwrap();
         let entry: WalEntry = WalEntry::from_reader(&mut file);
         match entry {
             WalEntry::Put { key, value } => {
@@ -438,7 +443,7 @@ mod test {
         let wrote = wal.append_batch(entries).unwrap();
         assert_eq!(wal.current_size, wrote);
         let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
-        for line in wal_file.lines() {
+        for line in wal_file.lines().skip(1) {
             let entry: WalEntry = WalEntry::from_bytes(line.unwrap().as_bytes());
             match entry {
                 WalEntry::Put { key, value } => {
@@ -482,7 +487,7 @@ mod test {
         // Drop the WAL and perform a restore
         drop(wal);
 
-        let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
+        let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
         wal.restore().unwrap();
         assert_eq!(
             wal.current_size, wrote,

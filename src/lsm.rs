@@ -246,7 +246,9 @@ impl Lsm {
 
             wal.restore()?;
             info!("Restoring Memtable");
-            for line in wal.lines()? {
+            // Skip 1 line for the WAL header in this file which has been verified
+            // to exist
+            for line in wal.lines()?.skip(1) {
                 match line {
                     Ok(line) => {
                         let entry: WalEntry = WalEntry::from_bytes(line.as_bytes());
@@ -316,9 +318,9 @@ mod test {
     use super::Lsm;
 
     // Helper for creating an [`Lsm`] store within a test directory
-    fn create_lsm(dir: &TempDir, wal_max_size: u64, memtable_max_size: u64) -> Lsm {
+    fn create_lsm(wal_id: u64, dir: &TempDir, wal_max_size: u64, memtable_max_size: u64) -> Lsm {
         let w = WalConfig {
-            id: 0,
+            id: wal_id,
             max_size: wal_max_size,
             log_directory: dir.path().to_path_buf(),
             buffer_size: None,
@@ -333,7 +335,7 @@ mod test {
     #[test]
     fn crud() {
         let dir = TempDir::new("crud").unwrap();
-        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(0, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
         assert_eq!(lsm.memtable.id(), 0);
@@ -363,7 +365,7 @@ mod test {
     #[test]
     fn compaction() {
         let dir = TempDir::new("compaction").unwrap();
-        let lsm = create_lsm(&dir, 1024, 1024);
+        let lsm = create_lsm(0, &dir, 1024, 1024);
 
         let dir_size = || {
             let entries = WalkDir::new(dir.path()).into_iter();
@@ -415,7 +417,7 @@ mod test {
     #[test]
     fn bloom() {
         let dir = TempDir::new("bloom").unwrap();
-        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(0, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
 
@@ -424,7 +426,7 @@ mod test {
 
         drop(lsm);
 
-        let mut lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let mut lsm = create_lsm(1, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
         lsm.restore().unwrap();
         assert!(
             lsm.check(b"foo".to_vec()),
@@ -439,7 +441,7 @@ mod test {
     #[test]
     fn segment_cleanup() {
         let dir = TempDir::new("segment_cleanup").unwrap();
-        let lsm = create_lsm(&dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
+        let lsm = create_lsm(0, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
         for i in 0..100 {
             lsm.insert(
                 format!("foo{i}").into_bytes(),
