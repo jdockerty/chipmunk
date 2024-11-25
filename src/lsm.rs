@@ -246,8 +246,6 @@ impl Lsm {
 
             wal.restore()?;
             info!("Restoring Memtable");
-            // Skip 1 line for the WAL header in this file which has been verified
-            // to exist
             for line in wal.lines()? {
                 match line {
                     Ok(line) => {
@@ -299,6 +297,15 @@ impl Lsm {
     /// Get the configured working directory.
     pub fn working_directory(&self) -> &Path {
         &self.working_directory
+    }
+}
+
+impl Drop for Lsm {
+    fn drop(&mut self) {
+        self.wal
+            .lock()
+            .flush_buffer()
+            .expect("Flushing buffer on drop");
     }
 }
 
@@ -416,14 +423,15 @@ mod test {
 
     #[test]
     fn bloom() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         let dir = TempDir::new("bloom").unwrap();
         let lsm = create_lsm(0, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
 
         lsm.insert(b"foo".to_vec(), b"bar".to_vec()).unwrap();
-
         assert!(lsm.check(b"foo".to_vec()));
         assert!(!lsm.check(b"baz".to_vec()));
-
         drop(lsm);
 
         let mut lsm = create_lsm(1, &dir, WAL_MAX_SEGMENT_SIZE_BYTES, MEMTABLE_MAX_SIZE_BYTES);
