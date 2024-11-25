@@ -300,6 +300,15 @@ impl Lsm {
     }
 }
 
+impl Drop for Lsm {
+    fn drop(&mut self) {
+        self.wal
+            .lock()
+            .flush_buffer()
+            .expect("Flushing buffer on drop");
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::path::Path;
