@@ -146,17 +146,20 @@ impl Wal {
         Ok(entry_bytes.len() as u64)
     }
 
-    pub fn flush_buffer(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn flush_buffer(&mut self) -> Result<(), ChipmunkError> {
         self.maybe_flush_buffer(true)
     }
 
-    fn maybe_flush_buffer(&mut self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    fn maybe_flush_buffer(&mut self, force: bool) -> Result<(), ChipmunkError> {
         if self.buffer.len() >= self.buffer_size || force {
             self.segment
                 .log_file
                 .write_all(&self.buffer)
                 .map_err(ChipmunkError::WalAppend)?;
-            self.segment.log_file.flush().unwrap();
+            self.segment
+                .log_file
+                .flush()
+                .map_err(ChipmunkError::SegmentFsync)?;
 
             // The buffer has been written, we do not need to keep it around otherwise
             // we risk misinforming the current segment size, as well as appending
@@ -237,8 +240,12 @@ impl Segment {
     ///
     /// # Panics
     ///
-    /// When the underlying file for the segment cannot be created with write
-    /// permissions.
+    /// A panic can occur when:
+    ///
+    /// - the underlying file for the segment cannot be created with write
+    ///   permissions.
+    /// - attempting to a segment file with the same name as an existing file.
+    /// - a failure to write the known magic bytes header.
     pub fn try_new(id: u64, path: &Path) -> Result<Self, ChipmunkError> {
         let log_file_path = format!("{}/{}.wal", path.display(), id);
         let id = AtomicU64::new(id);
@@ -250,7 +257,9 @@ impl Segment {
 
         let header = format!("{WAL_HEADER}\n");
 
-        new_segment.write_all(header.as_bytes()).unwrap();
+        new_segment
+            .write_all(header.as_bytes())
+            .expect("Can write header to new segment");
 
         Ok(Self {
             id,
