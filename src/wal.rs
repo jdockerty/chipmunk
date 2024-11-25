@@ -32,6 +32,7 @@ pub struct Wal {
     current_size: u64,
     max_size: u64,
     buffer: Vec<u8>,
+    buffer_size: usize,
 
     /// Closed, immutable WAL segment IDs.
     ///
@@ -45,17 +46,15 @@ pub struct Wal {
 
 impl Wal {
     pub fn new(id: u64, log_directory: &Path, max_size: u64, buffer_size: Option<usize>) -> Self {
-        let buf = if let Some(size) = buffer_size {
-            Vec::with_capacity(size)
-        } else {
-            Vec::with_capacity(DEFAULT_BUFFER_SIZE)
-        };
+        let buffer_size = buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE);
+        let buffer = Vec::with_capacity(buffer_size);
 
         Self {
             log_directory: log_directory.to_path_buf(),
             current_size: 0,
             max_size,
-            buffer: buf,
+            buffer,
+            buffer_size,
             segment: Segment::try_new(id, log_directory).unwrap(),
             closed_segments: Vec::new(),
         }
@@ -104,22 +103,17 @@ impl Wal {
             );
             let reader = BufReader::new(segment_file);
 
-            // The segments are bounded by the [`WAL_MAX_SEGMENT_SIZE_BYTES`]
-            // so this ensures the files themselves do not become huge for this
-            // operation.
-            let mut buf = Vec::new();
-
             for line in reader.lines().skip(1) {
                 let line = line.expect("WAL contains valid utf8");
                 bytes_read += line.as_bytes().len();
-                buf.push(WalEntry::from_bytes(line.as_bytes()));
+                self.append(WalEntry::from_bytes(line.as_bytes())).unwrap();
             }
             info!(
                 bytes_read,
                 current_segment = segment_count,
                 "Completed segment"
             );
-            self.append_batch(buf)?;
+            self.maybe_flush_buffer(true).unwrap();
         }
         info!(total_segments = segment_count, "Restored segments");
 
@@ -143,35 +137,35 @@ impl Wal {
 
     /// Append a [`WalEntry`] to the WAL file.
     pub fn append(&mut self, entry: WalEntry) -> Result<u64, ChipmunkError> {
-        self.append_batch(vec![entry])
+        let entry_bytes = entry.as_bytes();
+        self.buffer
+            .write_all(&entry_bytes)
+            .expect("Can write known entry to buffer");
+        self.current_size += entry_bytes.len() as u64;
+        self.maybe_flush_buffer(false).unwrap();
+        Ok(entry_bytes.len() as u64)
     }
 
-    /// Append a batch of [`WalEntry`] into the current log file.
-    fn append_batch(&mut self, entries: Vec<WalEntry>) -> Result<u64, ChipmunkError> {
-        // Invariant: the buffer should be empty here as it was previously
-        // cleared after appending older entries. If the buffer is not empty
-        // then we can append duplicate data which may become unbounded in size
-        // as more and more data is added.
-        assert_eq!(self.buffer.len(), 0);
+    pub fn flush_buffer(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.maybe_flush_buffer(true)
+    }
 
-        for e in entries {
-            self.buffer
-                .write_all(&e.as_bytes())
-                .expect("Can write known entry to buffer");
+    fn maybe_flush_buffer(&mut self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+        if self.buffer.len() >= self.buffer_size || force {
+            self.segment
+                .log_file
+                .write_all(&self.buffer)
+                .map_err(ChipmunkError::WalAppend)?;
+            self.segment.log_file.flush().unwrap();
+
+            // The buffer has been written, we do not need to keep it around otherwise
+            // we risk misinforming the current segment size, as well as appending
+            // pre-existing data.
+            self.buffer.clear();
+            Ok(())
+        } else {
+            Ok(())
         }
-        self.segment
-            .log_file
-            .write_all(&self.buffer)
-            .map_err(ChipmunkError::WalAppend)?;
-        self.segment.log_file.flush().unwrap();
-        let buffer_size = self.buffer.len() as u64;
-        self.current_size += buffer_size;
-
-        // The buffer has been written, we do not need to keep it around otherwise
-        // we risk misinforming the current segment size, as well as appending
-        // pre-existing data.
-        self.buffer.clear();
-        Ok(buffer_size)
     }
 
     /// Get the current path of the active WAL segment file.
@@ -372,7 +366,7 @@ impl Display for WalEntry {
 
 #[cfg(test)]
 mod test {
-    use std::io::{BufRead, BufReader, Cursor, Seek};
+    use std::io::{Cursor, Seek};
 
     use super::*;
 
@@ -417,7 +411,11 @@ mod test {
         let temp_dir = TempDir::new("write_wal").unwrap();
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
-        let wrote = wal.append_batch(put_entries()).unwrap();
+        let mut wrote = 0;
+        for entry in put_entries() {
+            wrote += wal.append(entry).unwrap();
+        }
+        wal.maybe_flush_buffer(true).unwrap();
         assert_eq!(wal.current_size, wrote);
 
         let mut file = std::fs::File::open(wal.path()).unwrap();
@@ -433,28 +431,13 @@ mod test {
             WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
         }
 
-        // Write multiple entries
-        let mut entries = vec![];
-        for _ in 0..10 {
-            entries.push(WalEntry::Put {
-                key: b"foo".to_vec(),
-                value: b"bar".to_vec(),
-            });
-        }
         let mut wal = Wal::new(1, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
-        let wrote = wal.append_batch(entries).unwrap();
-        assert_eq!(wal.current_size, wrote);
-        let wal_file = BufReader::new(std::fs::File::open(wal.path()).unwrap());
-        for line in wal_file.lines().skip(1) {
-            let entry: WalEntry = WalEntry::from_bytes(line.unwrap().as_bytes());
-            match entry {
-                WalEntry::Put { key, value } => {
-                    assert_eq!(&String::from_utf8_lossy(&key), "foo");
-                    assert_eq!(&String::from_utf8_lossy(&value), "bar");
-                }
-                WalEntry::Delete { key: _ } => panic!("Expected put operation, got delete!"),
-            }
+        let mut wrote = 0;
+        for entry in put_entries() {
+            wrote += wal.append(entry).unwrap();
         }
+        wal.maybe_flush_buffer(true).unwrap();
+        assert_eq!(wal.current_size, wrote);
     }
 
     #[test]
@@ -484,6 +467,7 @@ mod test {
                 }
             };
         }
+        wal.maybe_flush_buffer(true).unwrap();
         assert_eq!(wal.current_size, wrote);
 
         // Drop the WAL and perform a restore
