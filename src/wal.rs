@@ -128,15 +128,17 @@ impl Wal {
 
     /// Return a [`Lines`] iterator over the active segment file.
     pub fn lines(&self) -> Result<Lines<BufReader<File>>, ChipmunkError> {
-        let segment_path = format!(
-            "{}/{}.wal",
-            self.log_directory.display(),
-            self.segment.id.load(Ordering::Relaxed)
-        );
+        let segment_path = format!("{}/{}.wal", self.log_directory.display(), self.id());
         let segment_file =
             std::fs::File::open(&segment_path).map_err(ChipmunkError::SegmentOpen)?;
 
-        Ok(BufReader::new(segment_file).lines())
+        let mut reader = BufReader::new(segment_file);
+        let mut header = Vec::with_capacity(WAL_HEADER.len() + 1);
+        reader
+            .read_until(b'\n', &mut header)
+            .expect("WAL header exists within written segment file");
+
+        Ok(reader.lines())
     }
 
     /// Append a [`WalEntry`] to the WAL file.

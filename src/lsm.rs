@@ -248,7 +248,7 @@ impl Lsm {
             info!("Restoring Memtable");
             // Skip 1 line for the WAL header in this file which has been verified
             // to exist
-            for line in wal.lines()?.skip(1) {
+            for line in wal.lines()? {
                 match line {
                     Ok(line) => {
                         let entry: WalEntry = WalEntry::from_bytes(line.as_bytes());
