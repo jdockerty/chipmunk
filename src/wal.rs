@@ -8,10 +8,12 @@ use std::sync::atomic::Ordering;
 use std::{fs::File, sync::atomic::AtomicU64};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::ChipmunkError;
+use crate::chipmunk::wal_proto;
+use crate::{chipmunk, ChipmunkError};
 
 pub const WAL_MAX_SEGMENT_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 
@@ -105,8 +107,11 @@ impl Wal {
 
             for line in reader.lines().skip(1) {
                 let line = line.expect("WAL contains valid utf8");
+                let buf = bytes::Bytes::new();
+                let entry = wal_proto::WalEntry::decode(buf).unwrap();
+                println!("Read: {entry:?}");
                 bytes_read += line.as_bytes().len();
-                self.append(WalEntry::from_bytes(line.as_bytes())).unwrap();
+                self.append(entry).unwrap();
             }
             info!(
                 bytes_read,
@@ -136,14 +141,13 @@ impl Wal {
     }
 
     /// Append a [`WalEntry`] to the WAL file.
-    pub fn append(&mut self, entry: WalEntry) -> Result<u64, ChipmunkError> {
-        let entry_bytes = entry.as_bytes();
+    pub fn append(&mut self, entry: wal_proto::WalEntry) -> Result<u64, ChipmunkError> {
         self.buffer
-            .write_all(&entry_bytes)
+            .write_all(&entry.encode_to_vec())
             .expect("Can write known entry to buffer");
-        self.current_size += entry_bytes.len() as u64;
+        self.current_size += entry.encoded_len() as u64;
         self.maybe_flush_buffer(false).unwrap();
-        Ok(entry_bytes.len() as u64)
+        Ok(entry.encoded_len() as u64)
     }
 
     pub fn flush_buffer(&mut self) -> Result<(), ChipmunkError> {
@@ -379,19 +383,26 @@ mod test {
 
     use super::*;
 
+    use bytes::{Bytes, BytesMut};
     use tempdir::TempDir;
 
     const TINY_WAL_MAX_SIZE: u64 = 10;
 
-    fn put_entries() -> Vec<WalEntry> {
+    fn put_entries() -> Vec<wal_proto::WalEntry> {
         vec![
-            WalEntry::Put {
-                key: b"foo".to_vec(),
-                value: b"bar".to_vec(),
+            wal_proto::WalEntry {
+                marker: wal_proto::EntryType::Insert as i32,
+                entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
+                    key: b"foo".to_vec(),
+                    value: b"bar".to_vec(),
+                })),
             },
-            WalEntry::Put {
-                key: b"baz".to_vec(),
-                value: b"qux".to_vec(),
+            wal_proto::WalEntry {
+                marker: wal_proto::EntryType::Insert as i32,
+                entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
+                    key: b"baz".to_vec(),
+                    value: b"qux".to_vec(),
+                })),
             },
         ]
     }
@@ -431,6 +442,7 @@ mod test {
         // Skip over the WAL header for the entry read
         file.seek(std::io::SeekFrom::Start((WAL_HEADER.len() + 1) as u64))
             .unwrap();
+        let but = BytesMut::with_capacity(wal_proto::WalEntry::encoded_len());
         let entry: WalEntry = WalEntry::from_reader(&mut file);
         match entry {
             WalEntry::Put { key, value } => {
@@ -458,21 +470,26 @@ mod test {
         for i in 0..10 {
             match i {
                 0 | 3 | 6 => {
-                    wrote += wal
-                        .append(WalEntry::Delete {
-                            key: format!("key{i}").as_bytes().to_vec(),
-                        })
-                        .unwrap()
+                    let key = format!("key{i}");
+                    let entry = wal_proto::WalEntry {
+                        marker: wal_proto::EntryType::Delete as i32,
+                        entry: Some(wal_proto::wal_entry::Entry::Deletion(wal_proto::Delete {
+                            key: key.as_bytes().to_vec(),
+                        })),
+                    };
+                    wrote += wal.append(entry).unwrap()
                 }
                 _ => {
                     let key = format!("key{i}");
                     let value = format!("value{i}");
-                    wrote += wal
-                        .append(WalEntry::Put {
+                    let entry = wal_proto::WalEntry {
+                        marker: wal_proto::EntryType::Insert as i32,
+                        entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
                             key: key.as_bytes().to_vec(),
                             value: value.as_bytes().to_vec(),
-                        })
-                        .unwrap();
+                        })),
+                    };
+                    wrote += wal.append(entry).unwrap();
                 }
             };
         }
@@ -514,11 +531,14 @@ mod test {
         let mut wal = Wal::new(0, temp_dir.path(), WAL_MAX_SEGMENT_SIZE_BYTES, None);
 
         for _ in 0..3 {
-            wal.append(WalEntry::Put {
-                key: b"foo".to_vec(),
-                value: b"bar".to_vec(),
-            })
-            .unwrap();
+            let entry = wal_proto::WalEntry {
+                marker: wal_proto::EntryType::Insert as i32,
+                entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
+                    key: b"foo".to_vec(),
+                    value: b"bar".to_vec(),
+                })),
+            };
+            wal.append(entry).unwrap();
         }
 
         assert_eq!(wal.closed_segments.len(), 0, "No closed segments");
@@ -540,11 +560,14 @@ mod test {
         let segment_count = 5;
         for i in 0..segment_count {
             for _ in 0..3 {
-                wal.append(WalEntry::Put {
-                    key: b"foo".to_vec(),
-                    value: b"bar".to_vec(),
-                })
-                .unwrap();
+                let entry = wal_proto::WalEntry {
+                    marker: wal_proto::EntryType::Insert as i32,
+                    entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
+                        key: b"foo".to_vec(),
+                        value: b"bar".to_vec(),
+                    })),
+                };
+                wal.append(entry).unwrap();
             }
             assert_eq!(wal.segment.id(), i);
             wal.rotate().expect("Can rotate WAL during test");

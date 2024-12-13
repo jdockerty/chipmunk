@@ -7,6 +7,12 @@ pub mod client;
 pub mod config;
 pub mod server;
 
+pub(crate) mod chipmunk {
+    pub(crate) mod wal_proto {
+        include!(concat!(env!("OUT_DIR"), "/chipmunk.wal_proto.rs"));
+    }
+}
+
 mod lsm;
 mod memtable;
 mod wal;

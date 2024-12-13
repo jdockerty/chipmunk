@@ -9,6 +9,7 @@ use fxhash::FxHashMap;
 use parking_lot::Mutex;
 use tracing::{debug, error, info};
 
+use crate::chipmunk::wal_proto;
 use crate::{
     config::{MemtableConfig, WalConfig},
     memtable::Memtable,
@@ -65,13 +66,15 @@ impl Lsm {
     /// A [`WalEntry`] is appended into the WAL before proceeding to insert the
     /// key-value pair into an in-memory index, the L0 [`Memtable`].
     pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result<(), ChipmunkError> {
-        let entry = WalEntry::Put {
-            key: key.to_vec(),
-            value: value.to_vec(),
-        };
-
         {
             let mut wal = self.wal.lock();
+            let entry = wal_proto::WalEntry {
+                marker: wal_proto::EntryType::Insert as i32,
+                entry: Some(wal_proto::wal_entry::Entry::Insertion(wal_proto::Insert {
+                    key: key.to_vec(),
+                    value: value.to_vec(),
+                })),
+            };
             wal.append(entry)?;
             if wal.size() >= self.wal_config.max_size {
                 wal.rotate()?;
@@ -201,9 +204,13 @@ impl Lsm {
 
     pub fn delete(&self, key: Vec<u8>) -> Result<(), ChipmunkError> {
         debug!(key=?String::from_utf8_lossy(&key), "Deleting key");
-        self.wal
-            .lock()
-            .append(WalEntry::Delete { key: key.clone() })?;
+        let entry = wal_proto::WalEntry {
+            marker: wal_proto::EntryType::Delete as i32,
+            entry: Some(wal_proto::wal_entry::Entry::Deletion(wal_proto::Delete {
+                key: key.to_vec(),
+            })),
+        };
+        self.wal.lock().append(entry)?;
         self.memtable.delete(key);
 
         Ok(())
